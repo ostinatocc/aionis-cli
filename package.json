@@ -1,0 +1,35 @@
+{
+  "name": "aionis",
+  "version": "0.2.5",
+  "description": "Product CLI for installing and operating Aionis Runtime.",
+  "license": "Apache-2.0",
+  "homepage": "https://docs.aionis.work/developer-platform/start/install",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ostinatocc/aionis-cli.git"
+  },
+  "type": "module",
+  "bin": {
+    "aionis": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "tsx --test test/*.test.ts",
+    "prepack": "npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.22.4",
+    "typescript": "^5.6.3"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
