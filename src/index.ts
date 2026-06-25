@@ -17,6 +17,8 @@ export type SetupOptions = {
   apiKey: string | null;
   quickstart: AionisQuickstart;
   withAifs: boolean;
+  withZvecAnn: boolean;
+  zvecPath: string | null;
   withClaudeCode: boolean;
   claudeCodeDir: string | null;
   claudeCodeBaseUrl: string;
@@ -53,6 +55,8 @@ Options:
   --repo <url>              Runtime git repo passed to @aionis/create.
   --branch <name>           Runtime git branch or tag passed to @aionis/create.
   --with-aifs               Include @aionis/aifs file-surface setup commands.
+  --with-zvec-ann           Enable optional Zvec ANN candidate index in the Runtime.
+  --zvec-path <path>        Optional Zvec index path passed to @aionis/create.
   --with-claude-code        Install Claude Code lifecycle hooks.
   --claude-code-dir <path>  Directory used as Claude Code onboarding cwd. Defaults to current directory.
   --claude-code-base-url <url>
@@ -134,6 +138,8 @@ export function parseAionisArgs(argv: string[], env: NodeJS.ProcessEnv = process
   let apiKey: string | null = null;
   let quickstart: AionisQuickstart = "none";
   let withAifs = false;
+  let withZvecAnn = false;
+  let zvecPath: string | null = null;
   let withClaudeCode = false;
   let claudeCodeDir: string | null = null;
   let claudeCodeBaseUrl = env.AIONIS_CLAUDE_CODE_BASE_URL?.trim() || DEFAULT_CLAUDE_CODE_BASE_URL;
@@ -200,6 +206,16 @@ export function parseAionisArgs(argv: string[], env: NodeJS.ProcessEnv = process
       withAifs = true;
       continue;
     }
+    if (arg === "--with-zvec-ann") {
+      withZvecAnn = true;
+      continue;
+    }
+    if (arg === "--zvec-path") {
+      zvecPath = readFlagValue(rest, i, arg);
+      withZvecAnn = true;
+      i += 1;
+      continue;
+    }
     if (arg === "--with-claude-code") {
       withClaudeCode = true;
       continue;
@@ -264,6 +280,8 @@ export function parseAionisArgs(argv: string[], env: NodeJS.ProcessEnv = process
       apiKey,
       quickstart,
       withAifs,
+      withZvecAnn,
+      zvecPath,
       withClaudeCode,
       claudeCodeDir,
       claudeCodeBaseUrl,
@@ -380,6 +398,10 @@ export async function promptForSetupOptions(options: SetupOptions): Promise<Setu
       next.claudeCodeBaseUrl = await askText(rl, "Claude Code Runtime URL", next.claudeCodeBaseUrl);
     }
     next.withAifs = await askBoolean(rl, "Show AIFS file-surface setup commands", next.withAifs);
+    next.withZvecAnn = await askBoolean(rl, "Enable Zvec ANN candidate index", next.withZvecAnn);
+    if (next.withZvecAnn && next.zvecPath) {
+      next.zvecPath = await askText(rl, "Zvec index path", next.zvecPath);
+    }
     const runDemo = await askBoolean(rl, "Run local smoke demo after install", false);
     next.quickstart = runDemo ? "first-value" : "none";
     next.skipQuickstart = !runDemo;
@@ -407,6 +429,10 @@ export function createAionisCreateArgs(options: SetupOptions): string[] {
   if (options.repo) args.push("--repo", options.repo);
   if (options.branch) args.push("--branch", options.branch);
   if (options.withAifs) args.push("--with-aifs");
+  if (options.withZvecAnn) {
+    args.push("--with-zvec-ann");
+    if (options.zvecPath) args.push("--zvec-path", options.zvecPath);
+  }
   if (options.withClaudeCode) {
     args.push("--with-claude-code", "--claude-code-base-url", options.claudeCodeBaseUrl);
     if (options.claudeCodeDir) args.push("--claude-code-dir", options.claudeCodeDir);

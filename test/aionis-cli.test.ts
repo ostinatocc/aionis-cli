@@ -44,6 +44,8 @@ test("aionis setup parses a product default that installs a sidecar Runtime", ()
   assert.equal(options.provider, "none");
   assert.equal(options.quickstart, "none");
   assert.equal(options.skipQuickstart, false);
+  assert.equal(options.withZvecAnn, false);
+  assert.equal(options.zvecPath, null);
   assert.equal(options.withClaudeCode, false);
   assert.equal(options.yes, false);
   assert.equal(options.dryRun, false);
@@ -158,6 +160,33 @@ test("aionis setup builds create-aionis args for Claude Code without duplicating
     "--claude-code-mcp-name",
     "aionis-local",
     "--claude-code-skip-mcp",
+  ]);
+});
+
+test("aionis setup passes optional Zvec ANN setup through to @aionis/create", () => {
+  const { options } = parseAionisArgs([
+    "setup",
+    ".aionis-runtime",
+    "--provider",
+    "minimax",
+    "--with-zvec-ann",
+    "--zvec-path",
+    ".aionis/zvec-ann",
+    "--yes",
+  ], {});
+
+  assert.equal(options.withZvecAnn, true);
+  assert.equal(options.zvecPath, ".aionis/zvec-ann");
+  assert.deepEqual(createAionisCreateArgs(options), [
+    "create-aionis",
+    ".aionis-runtime",
+    "--provider",
+    "minimax",
+    "--quickstart",
+    "none",
+    "--with-zvec-ann",
+    "--zvec-path",
+    ".aionis/zvec-ann",
   ]);
 });
 
