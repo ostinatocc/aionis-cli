@@ -42,7 +42,7 @@ test("aionis setup parses a product default that installs a sidecar Runtime", ()
   const { options } = parseAionisArgs(["setup"], {});
   assert.equal(options.dir, ".aionis-runtime");
   assert.equal(options.createPackage, "@aionis/create@latest");
-  assert.equal(options.provider, "none");
+  assert.equal(options.provider, "openai");
   assert.equal(options.quickstart, "none");
   assert.equal(options.skipQuickstart, false);
   assert.equal(options.withZvecAnn, false);
@@ -58,7 +58,7 @@ test("aionis setup runs a local demo only when explicitly requested", () => {
 
   assert.equal(options.quickstart, "first-value");
   assert.equal(options.skipQuickstart, false);
-  assert.deepEqual(plan.args.slice(-4), ["--provider", "none", "--quickstart", "first-value"]);
+  assert.deepEqual(plan.args.slice(-4), ["--provider", "openai", "--quickstart", "first-value"]);
 });
 
 test("aionis setup supports explicit no-demo mode", () => {
@@ -86,7 +86,7 @@ test("aionis setup hidden key input restores stdin for follow-up prompts", async
 });
 
 test("aionis setup detects provider from environment", () => {
-  assert.equal(defaultProvider({}), "none");
+  assert.equal(defaultProvider({}), "openai");
   assert.equal(defaultProvider({ OPENAI_API_KEY: "sk-openai" }), "openai");
   assert.equal(defaultProvider({ MINIMAX_API_KEY: "sk-minimax" }), "minimax");
   assert.equal(defaultProvider({ EMBEDDING_PROVIDER: "minimax", OPENAI_API_KEY: "sk-openai" }), "minimax");
@@ -217,7 +217,7 @@ test("aionis setup supports release overrides and dry-run", () => {
     "create-aionis",
     ".aionis-runtime",
     "--provider",
-    "none",
+    "openai",
     "--quickstart",
     "none",
     "--repo",
@@ -236,7 +236,11 @@ test("aionis setup prints Runtime-first next steps", () => {
   assert.equal(nextSteps.includes("Start the Runtime:"), true);
   assert.equal(nextSteps.includes("cd .aionis-runtime"), true);
   assert.equal(nextSteps.includes("npm run -s lite:start"), true);
+  assert.equal(nextSteps.includes("Health check:"), true);
   assert.equal(nextSteps.includes("SDK / HTTP base URL: http://127.0.0.1:3101"), true);
+  assert.equal(nextSteps.includes("POST /v1/observe -> POST /v1/guide"), true);
   assert.equal(nextSteps.includes("@aionis/mcp@latest"), true);
+  assert.equal(nextSteps.includes("@aionis/aifs@latest refresh"), true);
   assert.equal(nextSteps.includes("Start the Runtime first, then run claude"), true);
+  assert.equal(nextSteps.includes("Optional demos"), false);
 });

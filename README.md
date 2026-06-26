@@ -7,10 +7,12 @@ npx aionis setup
 ```
 
 `aionis setup` is the recommended first entry point. It installs the Runtime,
-collects an optional embedding provider key with hidden terminal input, writes
-the generated Runtime `.env` through `@aionis/create`, and prints the next
-commands for starting the Runtime and connecting SDK, HTTP, MCP, AIFS, or native
-plugins. The local demo is optional and disabled by default.
+collects an embedding provider key with hidden terminal input when needed,
+writes the generated Runtime `.env` through `@aionis/create`, and prints the
+next commands for starting the Runtime and connecting SDK, HTTP, MCP, AIFS, or
+native plugins.
+
+Setup is for real Agent use. It does not run demos by default.
 
 The top-level CLI does not duplicate installer logic. It delegates the actual
 Runtime install to the published `@aionis/create` package:
@@ -26,9 +28,8 @@ printed install plan.
 Useful non-interactive runs:
 
 ```bash
-npx aionis setup --yes
-npx aionis setup --demo first-value --yes
-OPENAI_API_KEY="sk-..." npx aionis setup .aionis-runtime --provider openai --demo sdk --yes
+OPENAI_API_KEY="sk-..." npx aionis setup .aionis-runtime --provider openai --yes
+MINIMAX_API_KEY="sk-..." npx aionis setup .aionis-runtime --provider minimax --yes
 npx aionis setup --with-claude-code --yes
 npx aionis setup --with-zvec-ann --yes
 ```

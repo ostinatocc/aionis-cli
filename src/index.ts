@@ -51,8 +51,8 @@ plugins connect to that Runtime after it is installed.
 
 Options:
   --dir <path>              Install directory. Defaults to ./.aionis-runtime.
-  --provider <name>         Embedding provider: none, openai, minimax, or custom. Defaults to detected env or none.
-  --demo <name>             Run an optional local demo after install: first-value, sdk, http, or multi-agent.
+  --provider <name>         Embedding provider: openai, minimax, none, or custom. Defaults to detected env or openai.
+  --demo <name>             Advanced: run an optional local demo after install: first-value, sdk, http, or multi-agent.
   --no-demo                 Do not run a local demo after install. This is the default.
   --quickstart <name>       Advanced alias for --demo. Also accepts none.
   --repo <url>              Runtime git repo passed to @aionis/create.
@@ -79,8 +79,8 @@ Options:
 Examples:
   npx aionis setup
   npx aionis setup --with-claude-code
-  npx aionis setup --demo first-value
-  OPENAI_API_KEY=... npx aionis setup --provider openai --demo sdk --yes
+  OPENAI_API_KEY=... npx aionis setup --provider openai --yes
+  MINIMAX_API_KEY=... npx aionis setup --provider minimax --yes
 `;
 }
 
@@ -103,7 +103,7 @@ export function defaultProvider(env: NodeJS.ProcessEnv = process.env): AionisPro
   if (explicit) return explicit;
   if (env.OPENAI_API_KEY?.trim()) return "openai";
   if (env.MINIMAX_API_KEY?.trim()) return "minimax";
-  return "none";
+  return "openai";
 }
 
 function parseQuickstart(value: string): AionisQuickstart {
@@ -389,13 +389,13 @@ export async function promptForSetupOptions(options: SetupOptions): Promise<Setu
 
   process.stdout.write("Aionis setup\n");
   process.stdout.write("This will install a local Aionis Runtime and write its .env for you.\n");
-  process.stdout.write("Press Enter to accept defaults. You can run demos later from the Runtime directory.\n\n");
+  process.stdout.write("Press Enter to accept defaults. Aionis is installed for real Agent use; demos are optional advanced commands.\n\n");
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   try {
     const next: SetupOptions = { ...options };
     next.dir = await askText(rl, "Install directory", next.dir);
-    next.provider = await askText(rl, "Embedding provider [none/openai/minimax]", next.provider);
+    next.provider = await askText(rl, "Embedding provider [openai/minimax/none]", next.provider);
     next.withClaudeCode = await askBoolean(rl, "Install Claude Code hooks", next.withClaudeCode);
     if (next.withClaudeCode) {
       next.claudeCodeBaseUrl = await askText(rl, "Claude Code Runtime URL", next.claudeCodeBaseUrl);
@@ -405,9 +405,8 @@ export async function promptForSetupOptions(options: SetupOptions): Promise<Setu
     if (next.withZvecAnn && next.zvecPath) {
       next.zvecPath = await askText(rl, "Zvec index path", next.zvecPath);
     }
-    const runDemo = await askBoolean(rl, "Run local smoke demo after install", false);
-    next.quickstart = runDemo ? "first-value" : "none";
-    next.skipQuickstart = !runDemo;
+    next.quickstart = "none";
+    next.skipQuickstart = true;
 
     const providerKey = providerEnvKey(next.provider);
     if (providerKey && !next.apiKey) {
@@ -496,9 +495,15 @@ export function formatSetupNextSteps(options: SetupOptions): string {
     `  cd ${options.dir}`,
     "  npm run -s lite:start",
     "",
+    "Health check:",
+    `  curl ${runtimeUrl}/health`,
+    "",
     "Connect an Agent host:",
     `  SDK / HTTP base URL: ${runtimeUrl}`,
+    `  SDK: createAionisClient({ baseUrl: "${runtimeUrl}" })`,
+    "  HTTP: POST /v1/observe -> POST /v1/guide -> POST /v1/feedback -> POST /v1/measure",
     `  MCP bridge: npx @aionis/mcp@latest --base-url ${runtimeUrl} --scope-from workspace`,
+    `  AIFS files: npx @aionis/aifs@latest refresh --base-url ${runtimeUrl} --scope your-project`,
   ];
 
   if (options.withClaudeCode) {
@@ -509,13 +514,7 @@ export function formatSetupNextSteps(options: SetupOptions): string {
     );
   }
 
-  lines.push(
-    "",
-    "Optional demos from the Runtime directory:",
-    "  npm run -s runtime:demo:first-value",
-    "  npm run -s runtime:quickstart:sdk",
-    "",
-  );
+  lines.push("");
 
   return lines.join("\n");
 }
