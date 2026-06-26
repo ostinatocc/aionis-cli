@@ -6,7 +6,7 @@
   "homepage": "https://docs.aionis.work/developer-platform/start/install",
   "repository": {
     "type": "git",
-    "url": "https://github.com/ostinatocc/aionis-cli.git"
+    "url": "git+https://github.com/ostinatocc/aionis-cli.git"
   },
   "type": "module",
   "bin": {
