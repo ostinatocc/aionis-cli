@@ -46,6 +46,9 @@ function usage(): string {
   return `Usage:
   npx aionis setup [dir] [options]
 
+Installs a local Aionis Runtime first. SDK, HTTP, MCP, AIFS, and native
+plugins connect to that Runtime after it is installed.
+
 Options:
   --dir <path>              Install directory. Defaults to ./.aionis-runtime.
   --provider <name>         Embedding provider: none, openai, minimax, or custom. Defaults to detected env or none.
@@ -483,6 +486,40 @@ export function formatSetupPlan(plan: SetupPlan): string {
   ].join("\n");
 }
 
+export function formatSetupNextSteps(options: SetupOptions): string {
+  const runtimeUrl = options.withClaudeCode ? options.claudeCodeBaseUrl : "http://127.0.0.1:3001";
+  const lines = [
+    "",
+    "Aionis setup complete.",
+    "",
+    "Start the Runtime:",
+    `  cd ${options.dir}`,
+    "  npm run -s lite:start",
+    "",
+    "Connect an Agent host:",
+    `  SDK / HTTP base URL: ${runtimeUrl}`,
+    `  MCP bridge: npx @aionis/mcp@latest --base-url ${runtimeUrl} --scope-from workspace`,
+  ];
+
+  if (options.withClaudeCode) {
+    lines.push(
+      "",
+      "Claude Code:",
+      "  Start the Runtime first, then run claude from your agent project.",
+    );
+  }
+
+  lines.push(
+    "",
+    "Optional demos from the Runtime directory:",
+    "  npm run -s runtime:demo:first-value",
+    "  npm run -s runtime:quickstart:sdk",
+    "",
+  );
+
+  return lines.join("\n");
+}
+
 function runPlan(plan: SetupPlan): void {
   const result = spawnSync(plan.command, plan.args, {
     env: plan.env,
@@ -513,6 +550,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     return;
   }
   runPlan(plan);
+  process.stdout.write(formatSetupNextSteps(options));
 }
 
 if (isCliEntrypoint(process.argv[1])) {

@@ -6,6 +6,7 @@ import {
   createAionisCreateArgs,
   createSetupPlan,
   defaultProvider,
+  formatSetupNextSteps,
   formatSetupPlan,
   parseAionisArgs,
   providerEnvKey,
@@ -226,4 +227,16 @@ test("aionis setup supports release overrides and dry-run", () => {
     "--skip-install",
     "--skip-quickstart",
   ]);
+});
+
+test("aionis setup prints Runtime-first next steps", () => {
+  const { options } = parseAionisArgs(["setup", ".aionis-runtime", "--with-claude-code", "--yes"], {});
+  const nextSteps = formatSetupNextSteps(options);
+
+  assert.equal(nextSteps.includes("Start the Runtime:"), true);
+  assert.equal(nextSteps.includes("cd .aionis-runtime"), true);
+  assert.equal(nextSteps.includes("npm run -s lite:start"), true);
+  assert.equal(nextSteps.includes("SDK / HTTP base URL: http://127.0.0.1:3101"), true);
+  assert.equal(nextSteps.includes("@aionis/mcp@latest"), true);
+  assert.equal(nextSteps.includes("Start the Runtime first, then run claude"), true);
 });
