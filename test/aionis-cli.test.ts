@@ -51,20 +51,20 @@ test("aionis setup parses a product default that installs a sidecar Runtime", ()
   assert.equal(options.dryRun, false);
 });
 
-test("aionis setup runs a local demo only when explicitly requested", () => {
-  const { options } = parseAionisArgs(["setup", "--demo", "first-value", "--yes"], {});
+test("aionis setup runs an install verification flow only when explicitly requested", () => {
+  const { options } = parseAionisArgs(["setup", "--quickstart", "sdk", "--yes"], {});
   const plan = createSetupPlan(options, {});
 
-  assert.equal(options.quickstart, "first-value");
+  assert.equal(options.quickstart, "sdk");
   assert.equal(options.skipQuickstart, false);
-  assert.deepEqual(plan.args.slice(-4), ["--provider", "openai", "--quickstart", "first-value"]);
+  assert.deepEqual(plan.args.slice(-4), ["--provider", "openai", "--quickstart", "sdk"]);
 });
 
-test("aionis setup supports explicit no-demo mode", () => {
-  const { options } = parseAionisArgs(["setup", "--demo", "first-value", "--no-demo", "--yes"], {});
+test("aionis setup supports skipping a selected install verification flow", () => {
+  const { options } = parseAionisArgs(["setup", "--quickstart", "sdk", "--skip-quickstart", "--yes"], {});
   const plan = createSetupPlan(options, {});
 
-  assert.equal(options.quickstart, "none");
+  assert.equal(options.quickstart, "sdk");
   assert.equal(options.skipQuickstart, true);
   assert.equal(plan.args.includes("--skip-quickstart"), true);
 });
@@ -104,7 +104,7 @@ test("aionis setup passes secrets through env, never command arguments", () => {
     "runtime",
     "--provider",
     "openai",
-    "--demo",
+    "--quickstart",
     "sdk",
     "--yes",
   ], { OPENAI_API_KEY: "sk-secret" });
@@ -128,8 +128,8 @@ test("aionis setup builds create-aionis args for Claude Code without duplicating
     ".aionis-runtime",
     "--provider",
     "none",
-    "--demo",
-    "first-value",
+    "--quickstart",
+    "http",
     "--with-claude-code",
     "--claude-code-dir",
     "agent-project",
@@ -149,7 +149,7 @@ test("aionis setup builds create-aionis args for Claude Code without duplicating
     "--provider",
     "none",
     "--quickstart",
-    "first-value",
+    "http",
     "--with-claude-code",
     "--claude-code-base-url",
     "http://127.0.0.1:3101",

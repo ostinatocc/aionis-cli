@@ -6,7 +6,7 @@ import readline from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 
 export type AionisProvider = "none" | "openai" | "minimax" | string;
-export type AionisQuickstart = "first-value" | "sdk" | "http" | "multi-agent" | "none";
+export type AionisQuickstart = "sdk" | "http" | "multi-agent" | "none";
 
 export type SetupOptions = {
   dir: string;
@@ -52,9 +52,7 @@ plugins connect to that Runtime after it is installed.
 Options:
   --dir <path>              Install directory. Defaults to ./.aionis-runtime.
   --provider <name>         Embedding provider: openai, minimax, none, or custom. Defaults to detected env or openai.
-  --demo <name>             Advanced: run an optional local demo after install: first-value, sdk, http, or multi-agent.
-  --no-demo                 Do not run a local demo after install. This is the default.
-  --quickstart <name>       Advanced alias for --demo. Also accepts none.
+  --quickstart <name>       Advanced: run an optional SDK, HTTP, or multi-agent verification flow after install. Defaults to none.
   --repo <url>              Runtime git repo passed to @aionis/create.
   --branch <name>           Runtime git branch or tag passed to @aionis/create.
   --with-aifs               Include @aionis/aifs file-surface setup commands.
@@ -76,7 +74,7 @@ Options:
   --dry-run                 Print the redacted install plan without running it.
   -h, --help                Show help.
 
-Examples:
+Common commands:
   npx aionis setup
   npx aionis setup --with-claude-code
   OPENAI_API_KEY=... npx aionis setup --provider openai --yes
@@ -107,16 +105,10 @@ export function defaultProvider(env: NodeJS.ProcessEnv = process.env): AionisPro
 }
 
 function parseQuickstart(value: string): AionisQuickstart {
-  if (value === "first-value" || value === "sdk" || value === "http" || value === "multi-agent" || value === "none") {
+  if (value === "sdk" || value === "http" || value === "multi-agent" || value === "none") {
     return value;
   }
-  throw new Error(`Unsupported quickstart "${value}". Use first-value, sdk, http, multi-agent, or none.`);
-}
-
-function parseDemo(value: string): AionisQuickstart {
-  const parsed = parseQuickstart(value);
-  if (parsed === "none") throw new Error("Use --no-demo instead of --demo none.");
-  return parsed;
+  throw new Error(`Unsupported quickstart "${value}". Use sdk, http, multi-agent, or none.`);
 }
 
 function parseClaudeCodeScopeFrom(value: string): SetupOptions["claudeCodeScopeFrom"] {
@@ -192,17 +184,6 @@ export function parseAionisArgs(argv: string[], env: NodeJS.ProcessEnv = process
       quickstart = parseQuickstart(readFlagValue(rest, i, arg));
       skipQuickstart = quickstart === "none";
       i += 1;
-      continue;
-    }
-    if (arg === "--demo") {
-      quickstart = parseDemo(readFlagValue(rest, i, arg));
-      skipQuickstart = false;
-      i += 1;
-      continue;
-    }
-    if (arg === "--no-demo") {
-      quickstart = "none";
-      skipQuickstart = true;
       continue;
     }
     if (arg === "--with-aifs") {
@@ -389,7 +370,7 @@ export async function promptForSetupOptions(options: SetupOptions): Promise<Setu
 
   process.stdout.write("Aionis setup\n");
   process.stdout.write("This will install a local Aionis Runtime and write its .env for you.\n");
-  process.stdout.write("Press Enter to accept defaults. Aionis is installed for real Agent use; demos are optional advanced commands.\n\n");
+  process.stdout.write("Press Enter to accept defaults. Aionis is installed for real Agent use; optional verification flows are advanced commands.\n\n");
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   try {

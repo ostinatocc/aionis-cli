@@ -12,7 +12,8 @@ writes the generated Runtime `.env` through `@aionis/create`, and prints the
 next commands for starting the Runtime and connecting SDK, HTTP, MCP, AIFS, or
 native plugins.
 
-Setup is for real Agent use. It does not run demos by default.
+Setup is for real Agent use. It installs the Runtime and integration surfaces
+without running optional verification flows by default.
 
 The top-level CLI does not duplicate installer logic. It delegates the actual
 Runtime install to the published `@aionis/create` package:
