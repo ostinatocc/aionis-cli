@@ -6,7 +6,6 @@ import {
   createAionisCreateArgs,
   createSetupPlan,
   defaultProvider,
-  formatSetupNextSteps,
   formatSetupPlan,
   parseAionisArgs,
   providerEnvKey,
@@ -229,18 +228,12 @@ test("aionis setup supports release overrides and dry-run", () => {
   ]);
 });
 
-test("aionis setup prints Runtime-first next steps", () => {
+test("aionis setup delegates final next steps to create-aionis", () => {
   const { options } = parseAionisArgs(["setup", ".aionis-runtime", "--with-claude-code", "--yes"], {});
-  const nextSteps = formatSetupNextSteps(options);
+  const plan = createSetupPlan(options, {});
 
-  assert.equal(nextSteps.includes("Start the Runtime:"), true);
-  assert.equal(nextSteps.includes("cd .aionis-runtime"), true);
-  assert.equal(nextSteps.includes("npm run -s lite:start"), true);
-  assert.equal(nextSteps.includes("Health check:"), true);
-  assert.equal(nextSteps.includes("SDK / HTTP base URL: http://127.0.0.1:3101"), true);
-  assert.equal(nextSteps.includes("POST /v1/observe -> POST /v1/guide"), true);
-  assert.equal(nextSteps.includes("@aionis/mcp@latest"), true);
-  assert.equal(nextSteps.includes("@aionis/aifs@latest refresh"), true);
-  assert.equal(nextSteps.includes("Start the Runtime first, then run claude"), true);
-  assert.equal(nextSteps.includes("Optional demos"), false);
+  assert.equal(plan.args.includes("create-aionis"), true);
+  assert.equal(plan.args.includes("--with-claude-code"), true);
+  assert.equal(plan.args.includes("--quickstart"), true);
+  assert.equal(plan.args.includes("none"), true);
 });
