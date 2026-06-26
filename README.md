@@ -16,11 +16,8 @@ Setup is for real Agent use. It installs the Runtime and integration surfaces
 without running optional verification flows by default.
 
 The top-level CLI does not duplicate installer logic. It delegates the actual
-Runtime install to the published `@aionis/create` package:
-
-```bash
-npm exec --yes --package @aionis/create@latest -- create-aionis ...
-```
+Runtime install to the published `@aionis/create` package internally, while
+keeping `npx aionis setup` as the public product entry point.
 
 API keys are passed to the installer process through environment variables, not
 through command-line arguments, so they are not echoed into shell history or the
