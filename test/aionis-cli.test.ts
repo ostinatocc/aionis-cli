@@ -87,13 +87,16 @@ test("aionis setup hidden key input restores stdin for follow-up prompts", async
 test("aionis setup detects provider from environment", () => {
   assert.equal(defaultProvider({}), "openai");
   assert.equal(defaultProvider({ OPENAI_API_KEY: "sk-openai" }), "openai");
+  assert.equal(defaultProvider({ DASHSCOPE_API_KEY: "sk-dashscope" }), "dashscope");
   assert.equal(defaultProvider({ MINIMAX_API_KEY: "sk-minimax" }), "minimax");
   assert.equal(defaultProvider({ EMBEDDING_PROVIDER: "minimax", OPENAI_API_KEY: "sk-openai" }), "minimax");
+  assert.equal(defaultProvider({ EMBEDDING_PROVIDER: "dashscope", OPENAI_API_KEY: "sk-openai" }), "dashscope");
 });
 
 test("aionis setup maps provider names to environment keys", () => {
   assert.equal(providerEnvKey("none"), "");
   assert.equal(providerEnvKey("openai"), "OPENAI_API_KEY");
+  assert.equal(providerEnvKey("dashscope"), "DASHSCOPE_API_KEY");
   assert.equal(providerEnvKey("minimax"), "MINIMAX_API_KEY");
   assert.equal(providerEnvKey("custom provider"), "CUSTOM_PROVIDER_API_KEY");
 });

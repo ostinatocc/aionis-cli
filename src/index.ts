@@ -5,7 +5,7 @@ import path from "node:path";
 import readline from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 
-export type AionisProvider = "none" | "openai" | "minimax" | string;
+export type AionisProvider = "none" | "openai" | "dashscope" | "minimax" | string;
 export type AionisQuickstart = "sdk" | "http" | "multi-agent" | "none";
 
 export type SetupOptions = {
@@ -51,7 +51,7 @@ plugins connect to that Runtime after it is installed.
 
 Options:
   --dir <path>              Install directory. Defaults to ./.aionis-runtime.
-  --provider <name>         Embedding provider: openai, minimax, none, or custom. Defaults to detected env or openai.
+  --provider <name>         Embedding provider: openai, dashscope, minimax, none, or custom. Defaults to detected env or openai.
   --quickstart <name>       Advanced: run an optional SDK, HTTP, or multi-agent verification flow after install. Defaults to none.
   --repo <url>              Runtime git repo passed to @aionis/create.
   --branch <name>           Runtime git branch or tag passed to @aionis/create.
@@ -78,6 +78,7 @@ Common commands:
   npx aionis setup
   npx aionis setup --with-claude-code
   OPENAI_API_KEY=... npx aionis setup --provider openai --yes
+  DASHSCOPE_API_KEY=... npx aionis setup --provider dashscope --yes
   MINIMAX_API_KEY=... npx aionis setup --provider minimax --yes
 `;
 }
@@ -92,6 +93,7 @@ export function providerEnvKey(provider: string): string {
   const normalized = provider.trim().toLowerCase();
   if (normalized === "none") return "";
   if (normalized === "openai") return "OPENAI_API_KEY";
+  if (normalized === "dashscope") return "DASHSCOPE_API_KEY";
   if (normalized === "minimax") return "MINIMAX_API_KEY";
   return `${normalized.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_API_KEY`;
 }
@@ -100,6 +102,7 @@ export function defaultProvider(env: NodeJS.ProcessEnv = process.env): AionisPro
   const explicit = env.EMBEDDING_PROVIDER?.trim();
   if (explicit) return explicit;
   if (env.OPENAI_API_KEY?.trim()) return "openai";
+  if (env.DASHSCOPE_API_KEY?.trim()) return "dashscope";
   if (env.MINIMAX_API_KEY?.trim()) return "minimax";
   return "openai";
 }
@@ -376,7 +379,7 @@ export async function promptForSetupOptions(options: SetupOptions): Promise<Setu
   try {
     const next: SetupOptions = { ...options };
     next.dir = await askText(rl, "Install directory", next.dir);
-    next.provider = await askText(rl, "Embedding provider [openai/minimax/none]", next.provider);
+    next.provider = await askText(rl, "Embedding provider [openai/dashscope/minimax/none]", next.provider);
     next.withClaudeCode = await askBoolean(rl, "Install Claude Code hooks", next.withClaudeCode);
     if (next.withClaudeCode) {
       next.claudeCodeBaseUrl = await askText(rl, "Claude Code Runtime URL", next.claudeCodeBaseUrl);

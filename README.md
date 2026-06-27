@@ -27,6 +27,7 @@ Useful non-interactive runs:
 
 ```bash
 OPENAI_API_KEY="sk-..." npx aionis setup .aionis-runtime --provider openai --yes
+DASHSCOPE_API_KEY="sk-..." npx aionis setup .aionis-runtime --provider dashscope --yes
 MINIMAX_API_KEY="sk-..." npx aionis setup .aionis-runtime --provider minimax --yes
 npx aionis setup --with-claude-code --yes
 npx aionis setup --with-zvec-ann --yes
