@@ -9,6 +9,7 @@ import {
   formatSetupPlan,
   parseAionisArgs,
   providerEnvKey,
+  assertProviderKeyConfigured,
 } from "../src/index.ts";
 
 class FakeTtyInput extends PassThrough {
@@ -52,7 +53,7 @@ test("aionis setup parses a product default that installs a sidecar Runtime", ()
 });
 
 test("aionis setup runs an install verification flow only when explicitly requested", () => {
-  const { options } = parseAionisArgs(["setup", "--quickstart", "sdk", "--yes"], {});
+  const { options } = parseAionisArgs(["setup", "--quickstart", "sdk", "--yes"], { OPENAI_API_KEY: "sk-openai" });
   const plan = createSetupPlan(options, {});
 
   assert.equal(options.quickstart, "sdk");
@@ -61,7 +62,7 @@ test("aionis setup runs an install verification flow only when explicitly reques
 });
 
 test("aionis setup supports skipping a selected install verification flow", () => {
-  const { options } = parseAionisArgs(["setup", "--quickstart", "sdk", "--skip-quickstart", "--yes"], {});
+  const { options } = parseAionisArgs(["setup", "--quickstart", "sdk", "--skip-quickstart", "--yes"], { OPENAI_API_KEY: "sk-openai" });
   const plan = createSetupPlan(options, {});
 
   assert.equal(options.quickstart, "sdk");
@@ -99,6 +100,19 @@ test("aionis setup maps provider names to environment keys", () => {
   assert.equal(providerEnvKey("dashscope"), "DASHSCOPE_API_KEY");
   assert.equal(providerEnvKey("minimax"), "MINIMAX_API_KEY");
   assert.equal(providerEnvKey("custom provider"), "CUSTOM_PROVIDER_API_KEY");
+});
+
+test("aionis setup fails fast for real providers without an API key", () => {
+  const { options } = parseAionisArgs(["setup", "--provider", "openai", "--yes"], {});
+
+  assert.throws(
+    () => assertProviderKeyConfigured(options),
+    /EMBEDDING_PROVIDER=openai requires OPENAI_API_KEY/,
+  );
+  assert.throws(
+    () => createSetupPlan(options, {}),
+    /OPENAI_API_KEY=.*npx aionis setup --provider openai --yes/,
+  );
 });
 
 test("aionis setup passes secrets through env, never command arguments", () => {
@@ -177,6 +191,7 @@ test("aionis setup passes optional Zvec ANN setup through to @aionis/create", ()
     ".aionis/zvec-ann",
     "--yes",
   ], {});
+  options.apiKey = "sk-minimax";
 
   assert.equal(options.withZvecAnn, true);
   assert.equal(options.zvecPath, ".aionis/zvec-ann");
@@ -196,6 +211,8 @@ test("aionis setup passes optional Zvec ANN setup through to @aionis/create", ()
 test("aionis setup supports release overrides and dry-run", () => {
   const { options } = parseAionisArgs([
     "setup",
+    "--provider",
+    "none",
     "--create-package",
     "file:/tmp/aionis-create",
     "--repo",
@@ -219,7 +236,7 @@ test("aionis setup supports release overrides and dry-run", () => {
     "create-aionis",
     ".aionis-runtime",
     "--provider",
-    "openai",
+    "none",
     "--quickstart",
     "none",
     "--repo",
@@ -232,7 +249,7 @@ test("aionis setup supports release overrides and dry-run", () => {
 });
 
 test("aionis setup delegates final next steps to create-aionis", () => {
-  const { options } = parseAionisArgs(["setup", ".aionis-runtime", "--with-claude-code", "--yes"], {});
+  const { options } = parseAionisArgs(["setup", ".aionis-runtime", "--with-claude-code", "--yes"], { OPENAI_API_KEY: "sk-openai" });
   const plan = createSetupPlan(options, {});
 
   assert.equal(plan.args.includes("create-aionis"), true);

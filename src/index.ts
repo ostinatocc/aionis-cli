@@ -98,6 +98,18 @@ export function providerEnvKey(provider: string): string {
   return `${normalized.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_API_KEY`;
 }
 
+export function assertProviderKeyConfigured(options: SetupOptions): void {
+  const providerKey = providerEnvKey(options.provider);
+  if (!providerKey || options.apiKey?.trim()) return;
+  throw new Error(
+    [
+      `EMBEDDING_PROVIDER=${options.provider} requires ${providerKey}.`,
+      `Run ${providerKey}=... npx aionis setup --provider ${options.provider} --yes`,
+      "or run npx aionis setup and paste the key when prompted.",
+    ].join(" "),
+  );
+}
+
 export function defaultProvider(env: NodeJS.ProcessEnv = process.env): AionisProvider {
   const explicit = env.EMBEDDING_PROVIDER?.trim();
   if (explicit) return explicit;
@@ -395,9 +407,10 @@ export async function promptForSetupOptions(options: SetupOptions): Promise<Setu
     const providerKey = providerEnvKey(next.provider);
     if (providerKey && !next.apiKey) {
       rl.pause();
-      const value = (await askHidden(`${providerKey} (hidden, leave blank to configure later): `)).trim();
+      const value = (await askHidden(`${providerKey} (hidden): `)).trim();
       rl.resume();
       next.apiKey = value || null;
+      assertProviderKeyConfigured(next);
     }
 
     process.stdout.write("\n");
@@ -432,6 +445,7 @@ export function createAionisCreateArgs(options: SetupOptions): string[] {
 }
 
 export function createSetupPlan(options: SetupOptions, env: NodeJS.ProcessEnv = process.env): SetupPlan {
+  assertProviderKeyConfigured(options);
   const providerKey = providerEnvKey(options.provider);
   const nextEnv: NodeJS.ProcessEnv = { ...env };
   const redactedEnv: Record<string, string> = {};
@@ -493,6 +507,7 @@ export function isCliEntrypoint(argvEntry: string | undefined, moduleUrl = impor
 export async function main(argv = process.argv.slice(2)): Promise<void> {
   const parsed = parseAionisArgs(argv);
   const options = await promptForSetupOptions(parsed.options);
+  assertProviderKeyConfigured(options);
   const plan = createSetupPlan(options);
   if (options.dryRun) {
     process.stdout.write(formatSetupPlan(plan));
