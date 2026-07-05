@@ -5,10 +5,13 @@ import {
   askHidden,
   createAionisCreateArgs,
   createSetupPlan,
+  createSkillCandidateRuntimeRequest,
   defaultProvider,
   formatSetupPlan,
   parseAionisArgs,
+  parseSkillCandidateArgs,
   providerEnvKey,
+  runSkillCandidateCommand,
   assertProviderKeyConfigured,
 } from "../src/index.ts";
 
@@ -36,6 +39,26 @@ class FakeTtyOutput extends Writable {
   text(): string {
     return this.chunks.join("");
   }
+}
+
+function captureStdout() {
+  const chunks: string[] = [];
+  return {
+    stdout: {
+      write(chunk: string | Uint8Array): boolean {
+        chunks.push(String(chunk));
+        return true;
+      },
+    },
+    text: () => chunks.join(""),
+  };
+}
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
 }
 
 test("aionis setup parses a product default that installs a sidecar Runtime", () => {
@@ -256,4 +279,151 @@ test("aionis setup delegates final next steps to create-aionis", () => {
   assert.equal(plan.args.includes("--with-claude-code"), true);
   assert.equal(plan.args.includes("--quickstart"), true);
   assert.equal(plan.args.includes("none"), true);
+});
+
+test("aionis skills parses operator candidate list options", () => {
+  const parsed = parseAionisArgs([
+    "skills",
+    "candidates",
+    "--runtime-url",
+    "http://runtime.local/",
+    "--api-key",
+    "sk-runtime",
+    "--tenant-id",
+    "tenant-a",
+    "--scope",
+    "tenant-a/repo",
+    "--status",
+    "all",
+    "--limit",
+    "7",
+    "--json",
+  ], {});
+
+  assert.equal(parsed.command, "skills");
+  assert.equal(parsed.options.action, "list");
+  assert.equal(parsed.options.runtimeUrl, "http://runtime.local/");
+  assert.equal(parsed.options.apiKey, "sk-runtime");
+  assert.equal(parsed.options.tenantId, "tenant-a");
+  assert.equal(parsed.options.scope, "tenant-a/repo");
+  assert.equal(parsed.options.status, "all");
+  assert.equal(parsed.options.limit, 7);
+  assert.equal(parsed.options.json, true);
+
+  assert.deepEqual(createSkillCandidateRuntimeRequest(parsed.options), {
+    method: "GET",
+    path: "/v1/skills/candidates?status=all&limit=7&tenant_id=tenant-a&scope=tenant-a%2Frepo",
+  });
+});
+
+test("aionis skills builds promote and reject review requests", () => {
+  const promote = parseSkillCandidateArgs([
+    "promote",
+    "skillcand_abc",
+    "--reviewer-id",
+    "operator-1",
+    "--reason",
+    "verified reusable trace",
+  ], {});
+  assert.deepEqual(createSkillCandidateRuntimeRequest(promote), {
+    method: "POST",
+    path: "/v1/skills/candidates/skillcand_abc/promote",
+    body: {
+      reviewer_id: "operator-1",
+      reason: "verified reusable trace",
+    },
+  });
+
+  const reject = parseSkillCandidateArgs(["reject", "skillcand_abc"], {});
+  assert.deepEqual(createSkillCandidateRuntimeRequest(reject), {
+    method: "POST",
+    path: "/v1/skills/candidates/skillcand_abc/reject",
+    body: {},
+  });
+});
+
+test("aionis skills materialize previews without observe commit by default", async () => {
+  const options = parseSkillCandidateArgs(["materialize", "skillcand_abc"], {
+    AIONIS_URL: "http://runtime.local",
+  });
+  const calls: Array<{ url: string; init?: RequestInit }> = [];
+  const fetchImpl = async (input: string | URL, init?: RequestInit): Promise<Response> => {
+    calls.push({ url: String(input), init });
+    return jsonResponse({
+      contract_version: "aionis_skill_candidate_materialize_result_v1",
+      candidate_id: "skillcand_abc",
+      draft: {
+        title: "Trace-derived procedure: verify first",
+        source_candidate_id: "skillcand_abc",
+        procedure_steps: ["Read target file", "Run focused verifier"],
+        acceptance_checks: ["verifier passed"],
+      },
+      recommended_observe_payload: {
+        input_text: "draft",
+      },
+    });
+  };
+  const output = captureStdout();
+
+  await runSkillCandidateCommand(options, fetchImpl, output.stdout as unknown as typeof process.stdout);
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "http://runtime.local/v1/skills/candidates/skillcand_abc/materialize");
+  assert.equal(output.text().includes("Not committed"), true);
+});
+
+test("aionis skills materialize --commit explicitly submits recommended observe payload", async () => {
+  const options = parseSkillCandidateArgs(["materialize", "skillcand_abc", "--commit"], {
+    AIONIS_URL: "http://runtime.local",
+    AIONIS_API_KEY: "sk-runtime",
+  });
+  const calls: Array<{ url: string; init?: RequestInit }> = [];
+  const responses = [
+    {
+      contract_version: "aionis_skill_candidate_materialize_result_v1",
+      candidate_id: "skillcand_abc",
+      draft: {
+        title: "Trace-derived procedure: verify first",
+        source_candidate_id: "skillcand_abc",
+        procedure_steps: ["Read target file"],
+      },
+      recommended_observe_payload: {
+        tenant_id: "default",
+        scope: "default",
+        input_text: "draft",
+        execution: {
+          summary: "draft",
+        },
+      },
+    },
+    {
+      contract_version: "aionis_observe_result_v1",
+      observed: {
+        memory_written: true,
+        execution_memory_count: 1,
+      },
+    },
+  ];
+  const fetchImpl = async (input: string | URL, init?: RequestInit): Promise<Response> => {
+    calls.push({ url: String(input), init });
+    return jsonResponse(responses.shift());
+  };
+  const output = captureStdout();
+
+  await runSkillCandidateCommand(options, fetchImpl, output.stdout as unknown as typeof process.stdout);
+
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].url, "http://runtime.local/v1/skills/candidates/skillcand_abc/materialize");
+  assert.equal(calls[1].url, "http://runtime.local/v1/observe");
+  assert.equal((calls[0].init?.headers as Record<string, string>)["x-api-key"], "sk-runtime");
+  assert.deepEqual(JSON.parse(String(calls[1].init?.body)), responses[0] ?? {
+    tenant_id: "default",
+    scope: "default",
+    input_text: "draft",
+    execution: {
+      summary: "draft",
+    },
+  });
+  assert.equal(output.text().includes("Observe commit:"), true);
+  assert.equal(output.text().includes("execution_memory_count=1"), true);
 });

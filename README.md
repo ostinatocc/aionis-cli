@@ -42,3 +42,38 @@ Dry-run without installing:
 ```bash
 npx aionis setup --provider openai --dry-run
 ```
+
+## Trace-derived skill review
+
+`aionis skills` is the operator entry point for reviewed trace-derived skill
+candidates. It calls Runtime product APIs directly and keeps the safety boundary
+explicit: materialize previews do not write memory, and only `--commit` submits
+the returned `recommended_observe_payload` to `/v1/observe`.
+
+```bash
+# List pending review candidates.
+npx aionis skills candidates --runtime-url http://127.0.0.1:3001
+
+# Record review decisions.
+npx aionis skills promote skillcand_... --reason "verified reusable trace"
+npx aionis skills reject skillcand_... --reason "not enough repeated evidence"
+
+# Preview the procedure memory draft. This does not mutate Runtime memory.
+npx aionis skills materialize skillcand_...
+
+# Explicitly commit the reviewed draft to Runtime memory.
+npx aionis skills materialize skillcand_... --commit
+```
+
+Useful options:
+
+```bash
+--runtime-url <url>   Defaults to AIONIS_URL, AIONIS_BASE_URL,
+                      AIONIS_RUNTIME_URL, or http://127.0.0.1:3001
+--api-key <key>       Defaults to AIONIS_API_KEY
+--tenant-id <id>
+--scope <scope>
+--status <pending_review|promoted|rejected|all>
+--limit <n>
+--json
+```

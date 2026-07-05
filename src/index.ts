@@ -7,6 +7,8 @@ import { fileURLToPath } from "node:url";
 
 export type AionisProvider = "none" | "openai" | "dashscope" | "minimax" | string;
 export type AionisQuickstart = "sdk" | "http" | "multi-agent" | "none";
+export type SkillCandidateReviewStatus = "pending_review" | "promoted" | "rejected" | "all";
+export type SkillCandidateAction = "list" | "promote" | "reject" | "materialize";
 
 export type SetupOptions = {
   dir: string;
@@ -38,13 +40,37 @@ export type SetupPlan = {
   redactedEnv: Record<string, string>;
 };
 
+export type SkillCandidateOptions = {
+  action: SkillCandidateAction;
+  candidateId: string | null;
+  runtimeUrl: string;
+  apiKey: string | null;
+  tenantId: string | null;
+  scope: string | null;
+  status: SkillCandidateReviewStatus;
+  limit: number;
+  reviewerId: string | null;
+  reason: string | null;
+  commit: boolean;
+  json: boolean;
+};
+
+export type AionisParsedCommand =
+  | { command: "setup"; options: SetupOptions }
+  | { command: "skills"; options: SkillCandidateOptions };
+
 const DEFAULT_DIR = ".aionis-runtime";
 const DEFAULT_CREATE_PACKAGE = "@aionis/create@latest";
 const DEFAULT_CLAUDE_CODE_BASE_URL = "http://127.0.0.1:3101";
+const DEFAULT_RUNTIME_URL = "http://127.0.0.1:3001";
 
 function usage(): string {
   return `Usage:
   npx aionis setup [dir] [options]
+  npx aionis skills candidates [options]
+  npx aionis skills promote <candidate-id> [options]
+  npx aionis skills reject <candidate-id> [options]
+  npx aionis skills materialize <candidate-id> [--commit] [options]
 
 Installs a local Aionis Runtime first. SDK, HTTP, MCP, AIFS, and native
 plugins connect to that Runtime after it is installed.
@@ -74,9 +100,28 @@ Options:
   --dry-run                 Print the redacted install plan without running it.
   -h, --help                Show help.
 
+Skills operator options:
+  --runtime-url <url>       Runtime URL. Defaults to AIONIS_URL, AIONIS_BASE_URL,
+                            AIONIS_RUNTIME_URL, or ${DEFAULT_RUNTIME_URL}.
+  --api-key <key>           Runtime API key. Defaults to AIONIS_API_KEY.
+  --tenant-id <id>          Tenant passed to Runtime product routes.
+  --scope <scope>           Scope passed to Runtime product routes.
+  --status <status>         Candidate list status: pending_review, promoted,
+                            rejected, or all. Defaults to pending_review.
+  --limit <n>               Candidate list limit. Defaults to 20.
+  --reviewer-id <id>        Reviewer id for promote/reject.
+  --reason <text>           Review reason for promote/reject.
+  --commit                  After materialize, explicitly submit the returned
+                            recommended_observe_payload to /v1/observe.
+  --json                    Print raw JSON response.
+
 Common commands:
   npx aionis setup
   npx aionis setup --with-claude-code
+  npx aionis skills candidates
+  npx aionis skills promote skillcand_... --reason "verified reusable trace"
+  npx aionis skills materialize skillcand_...
+  npx aionis skills materialize skillcand_... --commit
   OPENAI_API_KEY=... npx aionis setup --provider openai --yes
   DASHSCOPE_API_KEY=... npx aionis setup --provider dashscope --yes
   MINIMAX_API_KEY=... npx aionis setup --provider minimax --yes
@@ -131,14 +176,150 @@ function parseClaudeCodeScopeFrom(value: string): SetupOptions["claudeCodeScopeF
   throw new Error(`Unsupported Claude Code scope source "${value}". Use workspace, git, cwd, or none.`);
 }
 
-export function parseAionisArgs(argv: string[], env: NodeJS.ProcessEnv = process.env): { command: "setup"; options: SetupOptions } {
+function defaultRuntimeUrl(env: NodeJS.ProcessEnv = process.env): string {
+  return env.AIONIS_URL?.trim()
+    || env.AIONIS_BASE_URL?.trim()
+    || env.AIONIS_RUNTIME_URL?.trim()
+    || DEFAULT_RUNTIME_URL;
+}
+
+function parseSkillCandidateReviewStatus(value: string): SkillCandidateReviewStatus {
+  if (value === "pending_review" || value === "promoted" || value === "rejected" || value === "all") return value;
+  throw new Error(`Unsupported candidate status "${value}". Use pending_review, promoted, rejected, or all.`);
+}
+
+function parsePositiveInteger(value: string, flag: string): number {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) throw new Error(`${flag} requires a positive integer`);
+  return parsed;
+}
+
+function requiredCandidateId(value: string | undefined, action: string): string {
+  if (!value || value.startsWith("-")) throw new Error(`aionis skills ${action} requires a candidate id`);
+  return value;
+}
+
+export function parseSkillCandidateArgs(argv: string[], env: NodeJS.ProcessEnv = process.env): SkillCandidateOptions {
+  const [rawAction = "candidates", ...rest] = argv;
+  if (rawAction === "-h" || rawAction === "--help") {
+    process.stdout.write(usage());
+    process.exit(0);
+  }
+  const action: SkillCandidateAction =
+    rawAction === "candidates" || rawAction === "list" ? "list"
+      : rawAction === "promote" ? "promote"
+        : rawAction === "reject" ? "reject"
+          : rawAction === "materialize" ? "materialize"
+            : (() => {
+              throw new Error(`Unknown skills command "${rawAction}". Use candidates, promote, reject, or materialize.`);
+            })();
+
+  let candidateId: string | null = null;
+  let runtimeUrl = defaultRuntimeUrl(env);
+  let apiKey: string | null = env.AIONIS_API_KEY?.trim() || null;
+  let tenantId: string | null = null;
+  let scope: string | null = null;
+  let status: SkillCandidateReviewStatus = "pending_review";
+  let limit = 20;
+  let reviewerId: string | null = null;
+  let reason: string | null = null;
+  let commit = false;
+  let json = false;
+  let startIndex = 0;
+
+  if (action !== "list") {
+    candidateId = requiredCandidateId(rest[0], action);
+    startIndex = 1;
+  }
+
+  for (let i = startIndex; i < rest.length; i += 1) {
+    const arg = rest[i];
+    if (arg === "-h" || arg === "--help") {
+      process.stdout.write(usage());
+      process.exit(0);
+    }
+    if (arg === "--runtime-url" || arg === "--base-url") {
+      runtimeUrl = readFlagValue(rest, i, arg);
+      i += 1;
+      continue;
+    }
+    if (arg === "--api-key") {
+      apiKey = readFlagValue(rest, i, arg);
+      i += 1;
+      continue;
+    }
+    if (arg === "--tenant-id") {
+      tenantId = readFlagValue(rest, i, arg);
+      i += 1;
+      continue;
+    }
+    if (arg === "--scope") {
+      scope = readFlagValue(rest, i, arg);
+      i += 1;
+      continue;
+    }
+    if (arg === "--status") {
+      status = parseSkillCandidateReviewStatus(readFlagValue(rest, i, arg));
+      i += 1;
+      continue;
+    }
+    if (arg === "--limit") {
+      limit = parsePositiveInteger(readFlagValue(rest, i, arg), arg);
+      i += 1;
+      continue;
+    }
+    if (arg === "--reviewer-id") {
+      reviewerId = readFlagValue(rest, i, arg);
+      i += 1;
+      continue;
+    }
+    if (arg === "--reason") {
+      reason = readFlagValue(rest, i, arg);
+      i += 1;
+      continue;
+    }
+    if (arg === "--commit") {
+      commit = true;
+      continue;
+    }
+    if (arg === "--json") {
+      json = true;
+      continue;
+    }
+    if (arg.startsWith("-")) throw new Error(`Unknown option "${arg}"`);
+    throw new Error(`Unexpected positional argument "${arg}"`);
+  }
+
+  return {
+    action,
+    candidateId,
+    runtimeUrl,
+    apiKey,
+    tenantId,
+    scope,
+    status,
+    limit,
+    reviewerId,
+    reason,
+    commit,
+    json,
+  };
+}
+
+export function parseAionisArgs(argv: string[], env: NodeJS.ProcessEnv = process.env): AionisParsedCommand {
   if (argv.length === 0 || argv[0] === "-h" || argv[0] === "--help") {
     process.stdout.write(usage());
     process.exit(0);
   }
 
   const [command, ...rest] = argv;
-  if (command !== "setup") throw new Error(`Unknown command "${command}". Use: aionis setup`);
+  if (command === "skills") {
+    return {
+      command,
+      options: parseSkillCandidateArgs(rest, env),
+    };
+  }
+  if (command !== "setup") throw new Error(`Unknown command "${command}". Use: aionis setup or aionis skills`);
 
   let dir = DEFAULT_DIR;
   let createPackage = env.AIONIS_CREATE_PACKAGE?.trim() || DEFAULT_CREATE_PACKAGE;
@@ -494,6 +675,209 @@ function runPlan(plan: SetupPlan): void {
   }
 }
 
+type FetchLike = (input: string | URL, init?: RequestInit) => Promise<Response>;
+
+function compactObject(value: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== null && entry !== undefined));
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0) : [];
+}
+
+function normalizeRuntimeUrl(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) throw new Error("Runtime URL is required");
+  return trimmed.replace(/\/+$/, "");
+}
+
+function candidateBody(options: SkillCandidateOptions): Record<string, unknown> {
+  return compactObject({
+    tenant_id: options.tenantId,
+    scope: options.scope,
+    reviewer_id: options.reviewerId,
+    reason: options.reason,
+  });
+}
+
+export function createSkillCandidateRuntimeRequest(options: SkillCandidateOptions): {
+  method: "GET" | "POST";
+  path: string;
+  body?: Record<string, unknown>;
+} {
+  if (options.action === "list") {
+    const params = new URLSearchParams({
+      status: options.status,
+      limit: String(options.limit),
+    });
+    if (options.tenantId) params.set("tenant_id", options.tenantId);
+    if (options.scope) params.set("scope", options.scope);
+    return {
+      method: "GET",
+      path: `/v1/skills/candidates?${params.toString()}`,
+    };
+  }
+  if (!options.candidateId) throw new Error(`aionis skills ${options.action} requires a candidate id`);
+  const id = encodeURIComponent(options.candidateId);
+  if (options.action === "promote" || options.action === "reject") {
+    return {
+      method: "POST",
+      path: `/v1/skills/candidates/${id}/${options.action}`,
+      body: candidateBody(options),
+    };
+  }
+  return {
+    method: "POST",
+    path: `/v1/skills/candidates/${id}/materialize`,
+    body: compactObject({
+      tenant_id: options.tenantId,
+      scope: options.scope,
+    }),
+  };
+}
+
+async function runtimeJsonRequest<T = unknown>(
+  options: SkillCandidateOptions,
+  request: { method: "GET" | "POST"; path: string; body?: Record<string, unknown> },
+  fetchImpl: FetchLike,
+): Promise<T> {
+  const headers: Record<string, string> = {
+    accept: "application/json",
+  };
+  if (request.method === "POST") headers["content-type"] = "application/json";
+  if (options.apiKey) {
+    headers["x-api-key"] = options.apiKey;
+    headers.authorization = `Bearer ${options.apiKey}`;
+  }
+  const response = await fetchImpl(`${normalizeRuntimeUrl(options.runtimeUrl)}${request.path}`, {
+    method: request.method,
+    headers,
+    ...(request.method === "POST" ? { body: JSON.stringify(request.body ?? {}) } : {}),
+  });
+  const text = await response.text();
+  const payload = text ? JSON.parse(text) : null;
+  if (!response.ok) {
+    const record = asRecord(payload);
+    const message = stringValue(record?.message) ?? stringValue(record?.error) ?? response.statusText;
+    throw new Error(`Runtime ${request.method} ${request.path} failed (${response.status}): ${message}`);
+  }
+  return payload as T;
+}
+
+function formatCandidateRow(value: unknown): string {
+  const row = asRecord(value) ?? {};
+  const candidateId = stringValue(row.candidate_id) ?? "unknown";
+  const status = stringValue(row.review_status) ?? "unknown";
+  const skillName = stringValue(row.skill_name) ?? stringValue(asRecord(row.candidate)?.skill_name) ?? "Untitled skill candidate";
+  const label = stringValue(row.label) ?? "unknown";
+  const promotionStatus = stringValue(row.promotion_status) ?? "unknown";
+  const exportReady = row.export_ready === true ? "yes" : row.export_ready === false ? "no" : "unknown";
+  const reason = stringValue(row.reason);
+  return [
+    `- ${candidateId} [${status}] ${skillName}`,
+    `  label=${label} export_ready=${exportReady} promotion=${promotionStatus}`,
+    ...(reason ? [`  reason=${reason}`] : []),
+  ].join("\n");
+}
+
+function formatCandidateList(result: unknown): string {
+  const record = asRecord(result) ?? {};
+  const candidates = Array.isArray(record.candidates) ? record.candidates : [];
+  if (candidates.length === 0) return "No trace-derived skill candidates found.\n";
+  return [
+    `Trace-derived skill candidates (${candidates.length})`,
+    ...candidates.map(formatCandidateRow),
+    "",
+  ].join("\n");
+}
+
+function formatReviewResult(action: "promote" | "reject", result: unknown): string {
+  const record = asRecord(result) ?? {};
+  const row = Array.isArray(record.candidates) ? record.candidates[0] : null;
+  const candidate = asRecord(row);
+  const candidateId = stringValue(candidate?.candidate_id) ?? "unknown";
+  const status = stringValue(candidate?.review_status) ?? (action === "promote" ? "promoted" : "rejected");
+  const mutation = asRecord(record.safety)?.memory_runtime_mutation === false ? "false" : "unknown";
+  return [
+    `Candidate ${candidateId} ${status}.`,
+    `memory_runtime_mutation=${mutation}`,
+    "",
+  ].join("\n");
+}
+
+function formatMaterializeResult(result: unknown, committed: boolean): string {
+  const record = asRecord(result) ?? {};
+  const materialized = asRecord(record.materialized) ?? record;
+  const draft = asRecord(materialized.draft);
+  const observe = asRecord(record.observe);
+  const title = stringValue(draft?.title) ?? "Untitled procedure draft";
+  const candidateId = stringValue(materialized.candidate_id) ?? stringValue(draft?.source_candidate_id) ?? "unknown";
+  const steps = stringList(draft?.procedure_steps);
+  const checks = stringList(draft?.acceptance_checks);
+  const lines = [
+    "Trace-derived procedure draft",
+    `Candidate: ${candidateId}`,
+    `Title: ${title}`,
+    "requires_observe_commit=true",
+  ];
+  if (steps.length > 0) {
+    lines.push("Steps:");
+    steps.forEach((step, index) => lines.push(`  ${index + 1}. ${step}`));
+  }
+  if (checks.length > 0) {
+    lines.push("Acceptance checks:");
+    checks.forEach((check) => lines.push(`  - ${check}`));
+  }
+  if (committed) {
+    const observed = asRecord(observe?.observed);
+    lines.push("Observe commit:");
+    lines.push(`  memory_written=${observed?.memory_written === true ? "yes" : "unknown"}`);
+    lines.push(`  execution_memory_count=${observed?.execution_memory_count ?? "unknown"}`);
+  } else {
+    lines.push("Not committed. Re-run with --commit to explicitly submit recommended_observe_payload to /v1/observe.");
+  }
+  lines.push("");
+  return lines.join("\n");
+}
+
+function formatSkillCandidateOutput(options: SkillCandidateOptions, result: unknown): string {
+  if (options.action === "list") return formatCandidateList(result);
+  if (options.action === "promote" || options.action === "reject") return formatReviewResult(options.action, result);
+  return formatMaterializeResult(result, options.commit);
+}
+
+export async function runSkillCandidateCommand(
+  options: SkillCandidateOptions,
+  fetchImpl: FetchLike = fetch,
+  stdout: Pick<NodeJS.WriteStream, "write"> = process.stdout,
+): Promise<unknown> {
+  const first = await runtimeJsonRequest(options, createSkillCandidateRuntimeRequest(options), fetchImpl);
+  let result: unknown = first;
+  if (options.action === "materialize" && options.commit) {
+    const observePayload = asRecord(asRecord(first)?.recommended_observe_payload);
+    if (!observePayload) throw new Error("Materialize response did not include recommended_observe_payload");
+    const observe = await runtimeJsonRequest(options, {
+      method: "POST",
+      path: "/v1/observe",
+      body: observePayload,
+    }, fetchImpl);
+    result = {
+      materialized: first,
+      observe,
+    };
+  }
+  stdout.write(options.json ? `${JSON.stringify(result, null, 2)}\n` : formatSkillCandidateOutput(options, result));
+  return result;
+}
+
 export function isCliEntrypoint(argvEntry: string | undefined, moduleUrl = import.meta.url): boolean {
   if (!argvEntry) return false;
   const modulePath = fileURLToPath(moduleUrl);
@@ -506,6 +890,10 @@ export function isCliEntrypoint(argvEntry: string | undefined, moduleUrl = impor
 
 export async function main(argv = process.argv.slice(2)): Promise<void> {
   const parsed = parseAionisArgs(argv);
+  if (parsed.command === "skills") {
+    await runSkillCandidateCommand(parsed.options);
+    return;
+  }
   const options = await promptForSetupOptions(parsed.options);
   assertProviderKeyConfigured(options);
   const plan = createSetupPlan(options);
