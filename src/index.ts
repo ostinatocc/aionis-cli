@@ -10,6 +10,8 @@ export type AionisQuickstart = "sdk" | "http" | "multi-agent" | "none";
 export type SkillCandidateReviewStatus = "pending_review" | "promoted" | "rejected" | "all";
 export type SkillCandidateAction = "list" | "promote" | "reject" | "materialize";
 export type RuntimeInspectAction = "health" | "boundary" | "doctor";
+export type OperatorCommandAction = "snapshot" | "flight-recorder" | "forget";
+export type ForgetOperation = "suppress" | "unsuppress" | "rehydrate" | "activate";
 
 export type SetupOptions = {
   dir: string;
@@ -64,10 +66,42 @@ export type SkillCandidateOptions = RuntimeRequestOptions & {
   json: boolean;
 };
 
+export type OperatorCommandOptions = RuntimeRequestOptions & {
+  action: OperatorCommandAction;
+  inputPath: string | null;
+  tenantId: string | null;
+  scope: string | null;
+  runId: string | null;
+  guideTraceId: string | null;
+  taskSignature: string | null;
+  includeMarkdown: boolean;
+  operation: ForgetOperation | null;
+  target: string | null;
+  reason: string | null;
+  memoryIds: string[];
+  nodeIds: string[];
+  clientIds: string[];
+  usedMemoryIds: string[];
+  anchorId: string | null;
+  anchorUri: string | null;
+  targetTier: string | null;
+  outcome: string | null;
+  usedSurface: string | null;
+  verifierStatus: string | null;
+  toolStatus: string | null;
+  runtimeSignalRefs: string[];
+  mode: string | null;
+  until: string | null;
+  includeLinkedDecisions: boolean | null;
+  commit: boolean;
+  json: boolean;
+};
+
 export type AionisParsedCommand =
   | { command: "setup"; options: SetupOptions }
   | { command: "skills"; options: SkillCandidateOptions }
-  | { command: RuntimeInspectAction; options: RuntimeInspectOptions };
+  | { command: RuntimeInspectAction; options: RuntimeInspectOptions }
+  | { command: OperatorCommandAction; options: OperatorCommandOptions };
 
 const DEFAULT_DIR = ".aionis-runtime";
 const DEFAULT_CREATE_PACKAGE = "@aionis/create@latest";
@@ -84,6 +118,9 @@ function usage(): string {
   npx aionis health [options]
   npx aionis boundary [options]
   npx aionis doctor [options]
+  npx aionis snapshot [options]
+  npx aionis audit flight-recorder [options]
+  npx aionis forget <suppress|unsuppress|rehydrate|activate> [options] --commit
 
 Installs a local Aionis Runtime first. SDK, HTTP, MCP, AIFS, and native
 plugins connect to that Runtime after it is installed.
@@ -134,12 +171,43 @@ Runtime inspect options:
   --api-key <key>           Runtime API key. Defaults to AIONIS_API_KEY.
   --json                    Print raw JSON response.
 
+Operator options:
+  --input <path>            JSON request body to merge before command flags.
+  --tenant-id <id>
+  --scope <scope>
+  --run-id <id>
+  --guide-trace-id <id>
+  --task-signature <text>
+  --include-markdown        Ask snapshot to return markdown.
+  --reason <text>           Required for forget unless supplied by --input.
+  --memory-id <id>          Repeatable forget memory id.
+  --node-id <id>            Repeatable forget node id.
+  --client-id <id>          Repeatable forget client id.
+  --used-memory-id <id>     Repeatable forget activation id.
+  --anchor-id <id>
+  --anchor-uri <uri>
+  --target <memory|archive|payload|pattern>
+  --target-tier <warm|hot>
+  --outcome <positive|negative|neutral>
+  --used-surface <use_now|explicit_host_assertion|inspect_before_use|do_not_use>
+  --verifier-status <passed|failed|not_run|unknown>
+  --tool-status <succeeded|failed|not_run|unknown>
+  --runtime-signal-ref <id> Repeatable forget signal ref.
+  --mode <mode>
+  --until <iso-date>
+  --include-linked-decisions
+  --commit                  Required before aionis forget calls /v1/forget.
+  --json                    Print raw JSON response.
+
 Common commands:
   npx aionis setup
   npx aionis setup --with-claude-code
   npx aionis doctor
   npx aionis health
   npx aionis boundary
+  npx aionis snapshot --run-id run_123 --include-markdown
+  npx aionis audit flight-recorder --input flight-recorder-input.json
+  npx aionis forget rehydrate --memory-id mem_123 --reason "inspect archived evidence" --commit
   npx aionis skills candidates
   npx aionis skills promote skillcand_... --reason "verified reusable trace"
   npx aionis skills materialize skillcand_...
@@ -214,6 +282,11 @@ function parsePositiveInteger(value: string, flag: string): number {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed <= 0) throw new Error(`${flag} requires a positive integer`);
   return parsed;
+}
+
+function pushFlagValue(target: string[], argv: string[], index: number, flag: string): number {
+  target.push(readFlagValue(argv, index, flag));
+  return index + 1;
 }
 
 function requiredCandidateId(value: string | undefined, action: string): string {
@@ -369,6 +442,227 @@ export function parseRuntimeInspectArgs(
   };
 }
 
+function parseForgetOperation(value: string | undefined): ForgetOperation {
+  if (value === "suppress" || value === "unsuppress" || value === "rehydrate" || value === "activate") return value;
+  throw new Error("aionis forget requires an operation: suppress, unsuppress, rehydrate, or activate");
+}
+
+export function parseOperatorCommandArgs(
+  action: OperatorCommandAction,
+  argv: string[],
+  env: NodeJS.ProcessEnv = process.env,
+): OperatorCommandOptions {
+  let rest = argv;
+  let operation: ForgetOperation | null = null;
+  if (action === "forget") {
+    operation = parseForgetOperation(argv[0]);
+    rest = argv.slice(1);
+  }
+
+  let runtimeUrl = defaultRuntimeUrl(env);
+  let apiKey: string | null = env.AIONIS_API_KEY?.trim() || null;
+  let inputPath: string | null = null;
+  let tenantId: string | null = null;
+  let scope: string | null = null;
+  let runId: string | null = null;
+  let guideTraceId: string | null = null;
+  let taskSignature: string | null = null;
+  let includeMarkdown = false;
+  let target: string | null = null;
+  let reason: string | null = null;
+  const memoryIds: string[] = [];
+  const nodeIds: string[] = [];
+  const clientIds: string[] = [];
+  const usedMemoryIds: string[] = [];
+  const runtimeSignalRefs: string[] = [];
+  let anchorId: string | null = null;
+  let anchorUri: string | null = null;
+  let targetTier: string | null = null;
+  let outcome: string | null = null;
+  let usedSurface: string | null = null;
+  let verifierStatus: string | null = null;
+  let toolStatus: string | null = null;
+  let mode: string | null = null;
+  let until: string | null = null;
+  let includeLinkedDecisions: boolean | null = null;
+  let commit = false;
+  let json = false;
+
+  for (let i = 0; i < rest.length; i += 1) {
+    const arg = rest[i];
+    if (arg === "-h" || arg === "--help") {
+      process.stdout.write(usage());
+      process.exit(0);
+    }
+    if (arg === "--runtime-url" || arg === "--base-url") {
+      runtimeUrl = readFlagValue(rest, i, arg);
+      i += 1;
+      continue;
+    }
+    if (arg === "--api-key") {
+      apiKey = readFlagValue(rest, i, arg);
+      i += 1;
+      continue;
+    }
+    if (arg === "--input") {
+      inputPath = readFlagValue(rest, i, arg);
+      i += 1;
+      continue;
+    }
+    if (arg === "--tenant-id") {
+      tenantId = readFlagValue(rest, i, arg);
+      i += 1;
+      continue;
+    }
+    if (arg === "--scope") {
+      scope = readFlagValue(rest, i, arg);
+      i += 1;
+      continue;
+    }
+    if (arg === "--run-id") {
+      runId = readFlagValue(rest, i, arg);
+      i += 1;
+      continue;
+    }
+    if (arg === "--guide-trace-id") {
+      guideTraceId = readFlagValue(rest, i, arg);
+      i += 1;
+      continue;
+    }
+    if (arg === "--task-signature") {
+      taskSignature = readFlagValue(rest, i, arg);
+      i += 1;
+      continue;
+    }
+    if (arg === "--include-markdown") {
+      includeMarkdown = true;
+      continue;
+    }
+    if (arg === "--target") {
+      target = readFlagValue(rest, i, arg);
+      i += 1;
+      continue;
+    }
+    if (arg === "--reason") {
+      reason = readFlagValue(rest, i, arg);
+      i += 1;
+      continue;
+    }
+    if (arg === "--memory-id") {
+      i = pushFlagValue(memoryIds, rest, i, arg);
+      continue;
+    }
+    if (arg === "--node-id") {
+      i = pushFlagValue(nodeIds, rest, i, arg);
+      continue;
+    }
+    if (arg === "--client-id") {
+      i = pushFlagValue(clientIds, rest, i, arg);
+      continue;
+    }
+    if (arg === "--used-memory-id") {
+      i = pushFlagValue(usedMemoryIds, rest, i, arg);
+      continue;
+    }
+    if (arg === "--anchor-id") {
+      anchorId = readFlagValue(rest, i, arg);
+      i += 1;
+      continue;
+    }
+    if (arg === "--anchor-uri") {
+      anchorUri = readFlagValue(rest, i, arg);
+      i += 1;
+      continue;
+    }
+    if (arg === "--target-tier") {
+      targetTier = readFlagValue(rest, i, arg);
+      i += 1;
+      continue;
+    }
+    if (arg === "--outcome") {
+      outcome = readFlagValue(rest, i, arg);
+      i += 1;
+      continue;
+    }
+    if (arg === "--used-surface") {
+      usedSurface = readFlagValue(rest, i, arg);
+      i += 1;
+      continue;
+    }
+    if (arg === "--verifier-status") {
+      verifierStatus = readFlagValue(rest, i, arg);
+      i += 1;
+      continue;
+    }
+    if (arg === "--tool-status") {
+      toolStatus = readFlagValue(rest, i, arg);
+      i += 1;
+      continue;
+    }
+    if (arg === "--runtime-signal-ref") {
+      i = pushFlagValue(runtimeSignalRefs, rest, i, arg);
+      continue;
+    }
+    if (arg === "--mode") {
+      mode = readFlagValue(rest, i, arg);
+      i += 1;
+      continue;
+    }
+    if (arg === "--until") {
+      until = readFlagValue(rest, i, arg);
+      i += 1;
+      continue;
+    }
+    if (arg === "--include-linked-decisions") {
+      includeLinkedDecisions = true;
+      continue;
+    }
+    if (arg === "--commit") {
+      commit = true;
+      continue;
+    }
+    if (arg === "--json") {
+      json = true;
+      continue;
+    }
+    if (arg.startsWith("-")) throw new Error(`Unknown option "${arg}"`);
+    throw new Error(`Unexpected positional argument "${arg}"`);
+  }
+
+  return {
+    action,
+    inputPath,
+    runtimeUrl,
+    apiKey,
+    tenantId,
+    scope,
+    runId,
+    guideTraceId,
+    taskSignature,
+    includeMarkdown,
+    operation,
+    target,
+    reason,
+    memoryIds,
+    nodeIds,
+    clientIds,
+    usedMemoryIds,
+    anchorId,
+    anchorUri,
+    targetTier,
+    outcome,
+    usedSurface,
+    verifierStatus,
+    toolStatus,
+    runtimeSignalRefs,
+    mode,
+    until,
+    includeLinkedDecisions,
+    commit,
+    json,
+  };
+}
+
 export function parseAionisArgs(argv: string[], env: NodeJS.ProcessEnv = process.env): AionisParsedCommand {
   if (argv.length === 0 || argv[0] === "-h" || argv[0] === "--help") {
     process.stdout.write(usage());
@@ -388,8 +682,30 @@ export function parseAionisArgs(argv: string[], env: NodeJS.ProcessEnv = process
       options: parseRuntimeInspectArgs(command, rest, env),
     };
   }
+  if (command === "snapshot") {
+    return {
+      command,
+      options: parseOperatorCommandArgs(command, rest, env),
+    };
+  }
+  if (command === "audit") {
+    const [auditCommand, ...auditRest] = rest;
+    if (auditCommand !== "flight-recorder") {
+      throw new Error("aionis audit requires a subcommand: flight-recorder");
+    }
+    return {
+      command: "flight-recorder",
+      options: parseOperatorCommandArgs("flight-recorder", auditRest, env),
+    };
+  }
+  if (command === "forget") {
+    return {
+      command,
+      options: parseOperatorCommandArgs(command, rest, env),
+    };
+  }
   if (command !== "setup") {
-    throw new Error(`Unknown command "${command}". Use: aionis setup, aionis skills, aionis health, aionis boundary, or aionis doctor`);
+    throw new Error(`Unknown command "${command}". Use: aionis setup, aionis skills, aionis health, aionis boundary, aionis doctor, aionis snapshot, aionis audit, or aionis forget`);
   }
 
   let dir = DEFAULT_DIR;
@@ -757,6 +1073,14 @@ function compactObject(value: Record<string, unknown>): Record<string, unknown> 
   return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== null && entry !== undefined));
 }
 
+function compactArrayObject(value: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(value).filter(([, entry]) => {
+    if (entry === null || entry === undefined) return false;
+    if (Array.isArray(entry) && entry.length === 0) return false;
+    return true;
+  }));
+}
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
@@ -773,6 +1097,15 @@ function normalizeRuntimeUrl(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) throw new Error("Runtime URL is required");
   return trimmed.replace(/\/+$/, "");
+}
+
+function readJsonRecordFile(inputPath: string | null): Record<string, unknown> {
+  if (!inputPath) return {};
+  const resolved = path.resolve(inputPath);
+  const parsed = JSON.parse(fs.readFileSync(resolved, "utf8")) as unknown;
+  const record = asRecord(parsed);
+  if (!record) throw new Error(`--input ${inputPath} must contain a JSON object`);
+  return record;
 }
 
 function candidateBody(options: SkillCandidateOptions): Record<string, unknown> {
@@ -822,6 +1155,80 @@ export function createSkillCandidateRuntimeRequest(options: SkillCandidateOption
       tenant_id: options.tenantId,
       scope: options.scope,
     }),
+  };
+}
+
+function operatorFlagBody(options: OperatorCommandOptions): Record<string, unknown> {
+  if (options.action === "snapshot") {
+    return compactObject({
+      tenant_id: options.tenantId,
+      scope: options.scope,
+      run_id: options.runId,
+      guide_trace_id: options.guideTraceId,
+      task_signature: options.taskSignature,
+      ...(options.includeMarkdown ? { include_markdown: true } : {}),
+    });
+  }
+  if (options.action === "flight-recorder") {
+    return compactObject({
+      tenant_id: options.tenantId,
+      scope: options.scope,
+      run_id: options.runId,
+      guide_trace_id: options.guideTraceId,
+    });
+  }
+  return compactArrayObject({
+    operation: options.operation,
+    tenant_id: options.tenantId,
+    scope: options.scope,
+    run_id: options.runId,
+    guide_trace_id: options.guideTraceId,
+    target: options.target,
+    reason: options.reason,
+    memory_ids: options.memoryIds,
+    node_ids: options.nodeIds,
+    client_ids: options.clientIds,
+    used_memory_ids: options.usedMemoryIds,
+    anchor_id: options.anchorId,
+    anchor_uri: options.anchorUri,
+    target_tier: options.targetTier,
+    outcome: options.outcome,
+    used_surface: options.usedSurface,
+    verifier_status: options.verifierStatus,
+    tool_status: options.toolStatus,
+    runtime_signal_refs: options.runtimeSignalRefs,
+    mode: options.mode,
+    until: options.until,
+    include_linked_decisions: options.includeLinkedDecisions,
+  });
+}
+
+export function createOperatorRuntimeRequest(options: OperatorCommandOptions): RuntimeJsonRequest {
+  const input = readJsonRecordFile(options.inputPath);
+  const body = {
+    ...input,
+    ...operatorFlagBody(options),
+  };
+  if (options.action === "snapshot") {
+    return {
+      method: "POST",
+      path: "/v1/operator/snapshot",
+      body,
+    };
+  }
+  if (options.action === "flight-recorder") {
+    if (!options.inputPath) throw new Error("aionis audit flight-recorder requires --input <json> with product_trace or replay artifacts");
+    return {
+      method: "POST",
+      path: "/v1/audit/flight-recorder",
+      body,
+    };
+  }
+  if (!stringValue(body.reason)) throw new Error("aionis forget requires --reason or input.reason");
+  return {
+    method: "POST",
+    path: "/v1/forget",
+    body,
   };
 }
 
@@ -950,6 +1357,93 @@ export async function runRuntimeInspectCommand(
   return result;
 }
 
+function formatOperatorSnapshotResult(result: unknown): string {
+  const record = asRecord(result) ?? {};
+  const snapshot = asRecord(record.operator_snapshot) ?? {};
+  const task = asRecord(snapshot.task) ?? {};
+  const guideTrace = asRecord(snapshot.guide_trace) ?? {};
+  const receipt = asRecord(snapshot.memory_use_receipt) ?? {};
+  const lines = [
+    "Aionis operator snapshot",
+    `tenant=${stringValue(record.tenant_id) ?? stringValue(snapshot.tenant_id) ?? "unknown"} scope=${stringValue(record.scope) ?? stringValue(snapshot.scope) ?? "unknown"}`,
+    `run_id=${stringValue(task.run_id) ?? "unknown"} guide_trace_id=${stringValue(guideTrace.guide_trace_id) ?? "unknown"}`,
+    `history_used=${asRecord(snapshot.execution_state)?.history_used ?? "unknown"} actionable_history_used=${asRecord(snapshot.execution_state)?.actionable_history_used ?? "unknown"}`,
+    `memory_use_receipt=${receipt.contract_version ? "present" : "unknown"} markdown=${typeof record.markdown === "string" ? "yes" : "no"}`,
+    "",
+  ];
+  if (typeof record.markdown === "string" && record.markdown.trim()) {
+    lines.push(record.markdown.trim(), "");
+  }
+  return lines.join("\n");
+}
+
+function formatFlightRecorderResult(result: unknown): string {
+  const record = asRecord(result) ?? {};
+  const report = asRecord(record.agent_flight_recorder) ?? {};
+  const agentView = asRecord(report.agent_view) ?? {};
+  const attribution = asRecord(report.attribution) ?? {};
+  return [
+    "Aionis Agent Flight Recorder",
+    `tenant=${stringValue(record.tenant_id) ?? stringValue(report.tenant_id) ?? "unknown"} scope=${stringValue(record.scope) ?? stringValue(report.scope) ?? "unknown"}`,
+    `run_id=${stringValue(report.run_id) ?? "unknown"} guide_trace_id=${stringValue(report.guide_trace_id) ?? "unknown"}`,
+    `runtime_mutation=${report.runtime_mutation === false ? "false" : "unknown"} agent_prompt_included=${report.agent_prompt_included === false ? "false" : "unknown"}`,
+    `use_now=${stringList(agentView.use_now_memory_ids).length} inspect_first=${stringList(agentView.inspect_before_use_memory_ids).length} do_not_use=${stringList(agentView.do_not_use_memory_ids).length}`,
+    `attribution=${attribution.present === true ? "present" : "not_present"} outcome=${stringValue(attribution.outcome) ?? "unknown"}`,
+    "",
+  ].join("\n");
+}
+
+function formatForgetResult(result: unknown): string {
+  const record = asRecord(result) ?? {};
+  const effect = asRecord(record.forget_effect) ?? {};
+  const action = stringValue(effect.action) ?? stringValue(record.operation) ?? "unknown";
+  const target = stringValue(effect.target) ?? "unknown";
+  const affectedMemoryIds = stringList(effect.affected_memory_ids);
+  return [
+    "Aionis forget lifecycle action",
+    `operation=${action} target=${target}`,
+    `changed_count=${effect.changed_count ?? "unknown"}`,
+    `affected_memory_ids=${affectedMemoryIds.length > 0 ? affectedMemoryIds.join(", ") : "none"}`,
+    "",
+  ].join("\n");
+}
+
+function formatForgetPreview(request: RuntimeJsonRequest): string {
+  return [
+    "Aionis forget preview",
+    "runtime_mutation=false",
+    "Not committed. Re-run with --commit to submit this payload to /v1/forget.",
+    JSON.stringify(request.body ?? {}, null, 2),
+    "",
+  ].join("\n");
+}
+
+function formatOperatorOutput(options: OperatorCommandOptions, result: unknown): string {
+  if (options.action === "snapshot") return formatOperatorSnapshotResult(result);
+  if (options.action === "flight-recorder") return formatFlightRecorderResult(result);
+  return formatForgetResult(result);
+}
+
+export async function runOperatorCommand(
+  options: OperatorCommandOptions,
+  fetchImpl: FetchLike = fetch,
+  stdout: Pick<NodeJS.WriteStream, "write"> = process.stdout,
+): Promise<unknown> {
+  const request = createOperatorRuntimeRequest(options);
+  if (options.action === "forget" && !options.commit) {
+    const preview = {
+      preview: true,
+      runtime_mutation: false,
+      request,
+    };
+    stdout.write(options.json ? `${JSON.stringify(preview, null, 2)}\n` : formatForgetPreview(request));
+    return preview;
+  }
+  const result = await runtimeJsonRequest(options, request, fetchImpl);
+  stdout.write(options.json ? `${JSON.stringify(result, null, 2)}\n` : formatOperatorOutput(options, result));
+  return result;
+}
+
 function formatCandidateRow(value: unknown): string {
   const row = asRecord(value) ?? {};
   const candidateId = stringValue(row.candidate_id) ?? "unknown";
@@ -1072,9 +1566,16 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     await runSkillCandidateCommand(parsed.options);
     return;
   }
-  if (parsed.command !== "setup") {
+  if (parsed.command === "health" || parsed.command === "boundary" || parsed.command === "doctor") {
     await runRuntimeInspectCommand(parsed.options);
     return;
+  }
+  if (parsed.command === "snapshot" || parsed.command === "flight-recorder" || parsed.command === "forget") {
+    await runOperatorCommand(parsed.options);
+    return;
+  }
+  if (parsed.command !== "setup") {
+    throw new Error(`Unhandled command: ${parsed.command}`);
   }
   const options = await promptForSetupOptions(parsed.options);
   assertProviderKeyConfigured(options);

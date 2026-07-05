@@ -1,18 +1,24 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import test from "node:test";
 import {
   askHidden,
   createAionisCreateArgs,
+  createOperatorRuntimeRequest,
   createRuntimeInspectRequests,
   createSetupPlan,
   createSkillCandidateRuntimeRequest,
   defaultProvider,
   formatSetupPlan,
   parseAionisArgs,
+  parseOperatorCommandArgs,
   parseRuntimeInspectArgs,
   parseSkillCandidateArgs,
   providerEnvKey,
+  runOperatorCommand,
   runRuntimeInspectCommand,
   runSkillCandidateCommand,
   assertProviderKeyConfigured,
@@ -66,6 +72,21 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 function asRuntimeDoctorResult(value: unknown): { health: { ok?: boolean } } {
   return value as { health: { ok?: boolean } };
+}
+
+function asPreviewResult(value: unknown): { preview?: boolean } {
+  return value as { preview?: boolean };
+}
+
+function withJsonFile<T>(body: unknown, fn: (file: string) => T): T {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "aionis-cli-test-"));
+  const file = path.join(dir, "input.json");
+  fs.writeFileSync(file, JSON.stringify(body), "utf8");
+  try {
+    return fn(file);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 test("aionis setup parses a product default that installs a sidecar Runtime", () => {
@@ -381,6 +402,155 @@ test("aionis boundary --json prints raw boundary payload", async () => {
   await runRuntimeInspectCommand(options, async () => jsonResponse(payload), output.stdout as unknown as typeof process.stdout);
 
   assert.deepEqual(JSON.parse(output.text()), payload);
+});
+
+test("aionis snapshot builds an operator snapshot request", () => {
+  const parsed = parseAionisArgs([
+    "snapshot",
+    "--runtime-url",
+    "http://runtime.local",
+    "--tenant-id",
+    "tenant-a",
+    "--scope",
+    "scope-a",
+    "--run-id",
+    "run-123",
+    "--guide-trace-id",
+    "guide-123",
+    "--task-signature",
+    "checkout",
+    "--include-markdown",
+  ], {});
+
+  assert.equal(parsed.command, "snapshot");
+  assert.deepEqual(createOperatorRuntimeRequest(parsed.options), {
+    method: "POST",
+    path: "/v1/operator/snapshot",
+    body: {
+      tenant_id: "tenant-a",
+      scope: "scope-a",
+      run_id: "run-123",
+      guide_trace_id: "guide-123",
+      task_signature: "checkout",
+      include_markdown: true,
+    },
+  });
+});
+
+test("aionis audit flight-recorder requires and merges input JSON", () => {
+  assert.throws(
+    () => createOperatorRuntimeRequest(parseOperatorCommandArgs("flight-recorder", [], {})),
+    /requires --input/,
+  );
+
+  withJsonFile({
+    product_trace: {
+      before_guide: { agent_context: {} },
+      after_guide: { agent_context: {} },
+    },
+  }, (file) => {
+    const options = parseAionisArgs([
+      "audit",
+      "flight-recorder",
+      "--input",
+      file,
+      "--tenant-id",
+      "tenant-a",
+      "--scope",
+      "scope-a",
+      "--run-id",
+      "run-123",
+    ], {});
+
+    assert.equal(options.command, "flight-recorder");
+    assert.deepEqual(createOperatorRuntimeRequest(options.options), {
+      method: "POST",
+      path: "/v1/audit/flight-recorder",
+      body: {
+        product_trace: {
+          before_guide: { agent_context: {} },
+          after_guide: { agent_context: {} },
+        },
+        tenant_id: "tenant-a",
+        scope: "scope-a",
+        run_id: "run-123",
+      },
+    });
+  });
+});
+
+test("aionis forget previews without commit by default", async () => {
+  const options = parseOperatorCommandArgs("forget", [
+    "rehydrate",
+    "--runtime-url",
+    "http://runtime.local",
+    "--memory-id",
+    "mem-123",
+    "--reason",
+    "inspect archived evidence",
+  ], {});
+  const output = captureStdout();
+  const calls: string[] = [];
+
+  const result = await runOperatorCommand(options, async (input) => {
+    calls.push(String(input));
+    return jsonResponse({});
+  }, output.stdout as unknown as typeof process.stdout);
+
+  assert.equal(calls.length, 0);
+  assert.equal(asPreviewResult(result).preview, true);
+  assert.equal(output.text().includes("runtime_mutation=false"), true);
+  assert.equal(output.text().includes("\"operation\": \"rehydrate\""), true);
+});
+
+test("aionis forget --commit submits explicit lifecycle request", async () => {
+  const options = parseOperatorCommandArgs("forget", [
+    "activate",
+    "--runtime-url",
+    "http://runtime.local",
+    "--api-key",
+    "sk-runtime",
+    "--memory-id",
+    "mem-123",
+    "--run-id",
+    "run-123",
+    "--outcome",
+    "positive",
+    "--used-surface",
+    "use_now",
+    "--reason",
+    "host reported useful memory",
+    "--commit",
+  ], {});
+  const calls: Array<{ url: string; init?: RequestInit }> = [];
+  const output = captureStdout();
+
+  await runOperatorCommand(options, async (input, init) => {
+    calls.push({ url: String(input), init });
+    return jsonResponse({
+      product_action: "forget",
+      operation: "activate",
+      forget_effect: {
+        action: "activate",
+        target: "memory",
+        changed_count: 1,
+        affected_memory_ids: ["mem-123"],
+      },
+    });
+  }, output.stdout as unknown as typeof process.stdout);
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "http://runtime.local/v1/forget");
+  assert.equal((calls[0].init?.headers as Record<string, string>)["x-api-key"], "sk-runtime");
+  assert.deepEqual(JSON.parse(String(calls[0].init?.body)), {
+    operation: "activate",
+    run_id: "run-123",
+    reason: "host reported useful memory",
+    memory_ids: ["mem-123"],
+    outcome: "positive",
+    used_surface: "use_now",
+  });
+  assert.equal(output.text().includes("changed_count=1"), true);
 });
 
 test("aionis skills parses operator candidate list options", () => {

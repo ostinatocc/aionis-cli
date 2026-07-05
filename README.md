@@ -68,6 +68,45 @@ Useful options:
 --json                Print the raw Runtime response
 ```
 
+## Operator lifecycle and audit
+
+`aionis snapshot` and `aionis audit flight-recorder` are read-only operator
+surfaces. `aionis forget` is an explicit lifecycle-control surface and previews
+the request by default; it only calls `/v1/forget` when `--commit` is present.
+
+```bash
+# Read a compact operator snapshot.
+npx aionis snapshot --run-id run_123 --include-markdown
+
+# Generate an Agent Flight Recorder report from saved trace/snapshot artifacts.
+npx aionis audit flight-recorder --input flight-recorder-input.json
+
+# Preview a controlled forgetting or rehydration action.
+npx aionis forget rehydrate --memory-id mem_123 --reason "inspect archived evidence"
+
+# Commit the lifecycle action explicitly.
+npx aionis forget rehydrate --memory-id mem_123 --reason "inspect archived evidence" --commit
+```
+
+Useful options:
+
+```bash
+--input <path>        JSON request body merged before command flags
+--runtime-url <url>   Defaults to AIONIS_URL, AIONIS_BASE_URL,
+                      AIONIS_RUNTIME_URL, or http://127.0.0.1:3001
+--api-key <key>       Defaults to AIONIS_API_KEY
+--tenant-id <id>
+--scope <scope>
+--run-id <id>
+--guide-trace-id <id>
+--reason <text>
+--memory-id <id>      Repeatable for aionis forget
+--anchor-id <id>
+--anchor-uri <uri>
+--commit              Required before aionis forget mutates Runtime lifecycle state
+--json
+```
+
 ## Trace-derived skill review
 
 `aionis skills` is the operator entry point for reviewed trace-derived skill
