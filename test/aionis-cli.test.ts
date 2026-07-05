@@ -4,13 +4,16 @@ import test from "node:test";
 import {
   askHidden,
   createAionisCreateArgs,
+  createRuntimeInspectRequests,
   createSetupPlan,
   createSkillCandidateRuntimeRequest,
   defaultProvider,
   formatSetupPlan,
   parseAionisArgs,
+  parseRuntimeInspectArgs,
   parseSkillCandidateArgs,
   providerEnvKey,
+  runRuntimeInspectCommand,
   runSkillCandidateCommand,
   assertProviderKeyConfigured,
 } from "../src/index.ts";
@@ -59,6 +62,10 @@ function jsonResponse(body: unknown, status = 200): Response {
     status,
     headers: { "content-type": "application/json" },
   });
+}
+
+function asRuntimeDoctorResult(value: unknown): { health: { ok?: boolean } } {
+  return value as { health: { ok?: boolean } };
 }
 
 test("aionis setup parses a product default that installs a sidecar Runtime", () => {
@@ -279,6 +286,101 @@ test("aionis setup delegates final next steps to create-aionis", () => {
   assert.equal(plan.args.includes("--with-claude-code"), true);
   assert.equal(plan.args.includes("--quickstart"), true);
   assert.equal(plan.args.includes("none"), true);
+});
+
+test("aionis runtime inspect parses health and boundary options", () => {
+  const health = parseAionisArgs(["health", "--runtime-url", "http://runtime.local/", "--api-key", "sk-runtime"], {});
+
+  assert.equal(health.command, "health");
+  assert.equal(health.options.runtimeUrl, "http://runtime.local/");
+  assert.equal(health.options.apiKey, "sk-runtime");
+  assert.deepEqual(createRuntimeInspectRequests(health.options), [
+    {
+      method: "GET",
+      path: "/health",
+    },
+  ]);
+
+  const boundary = parseRuntimeInspectArgs("boundary", ["--json"], { AIONIS_URL: "http://runtime.local" });
+  assert.equal(boundary.runtimeUrl, "http://runtime.local");
+  assert.equal(boundary.json, true);
+  assert.deepEqual(createRuntimeInspectRequests(boundary), [
+    {
+      method: "GET",
+      path: "/v1/runtime/boundary-inventory",
+    },
+  ]);
+});
+
+test("aionis doctor reads health and boundary inventory", async () => {
+  const options = parseRuntimeInspectArgs("doctor", [], {
+    AIONIS_URL: "http://runtime.local",
+  });
+  const calls: Array<{ url: string; init?: RequestInit }> = [];
+  const responses = [
+    {
+      ok: true,
+      runtime: {
+        edition: "lite",
+        mode: "local",
+        package_name: "aionis-runtime",
+        package_version: "0.3.6",
+      },
+      storage: {
+        backend: "sqlite",
+      },
+    },
+    {
+      surface_version: "runtime_boundary_inventory_response_v1",
+      surface_semantics: {
+        read_only: true,
+        persistence_effect: "none",
+        authority_effect: "none",
+      },
+      summary: {
+        total_entries: 5,
+        total_files: 3,
+        authority_entries: 5,
+        authority_producer_entries: 2,
+      },
+      files: ["src/kernel/learning-kernel.ts"],
+    },
+  ];
+  const fetchImpl = async (input: string | URL, init?: RequestInit): Promise<Response> => {
+    calls.push({ url: String(input), init });
+    return jsonResponse(responses.shift());
+  };
+  const output = captureStdout();
+
+  const result = await runRuntimeInspectCommand(options, fetchImpl, output.stdout as unknown as typeof process.stdout);
+
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].url, "http://runtime.local/health");
+  assert.equal(calls[1].url, "http://runtime.local/v1/runtime/boundary-inventory");
+  assert.equal(asRuntimeDoctorResult(result).health.ok, true);
+  assert.equal(output.text().includes("Aionis Runtime doctor"), true);
+  assert.equal(output.text().includes("boundary=ok entries=5 files=3"), true);
+});
+
+test("aionis boundary --json prints raw boundary payload", async () => {
+  const options = parseRuntimeInspectArgs("boundary", ["--json"], {
+    AIONIS_URL: "http://runtime.local",
+  });
+  const payload = {
+    surface_version: "runtime_boundary_inventory_response_v1",
+    summary: {
+      total_entries: 1,
+      total_files: 1,
+      authority_entries: 1,
+      authority_producer_entries: 1,
+    },
+    files: ["src/kernel/learning-kernel.ts"],
+  };
+  const output = captureStdout();
+
+  await runRuntimeInspectCommand(options, async () => jsonResponse(payload), output.stdout as unknown as typeof process.stdout);
+
+  assert.deepEqual(JSON.parse(output.text()), payload);
 });
 
 test("aionis skills parses operator candidate list options", () => {

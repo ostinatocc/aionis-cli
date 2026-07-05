@@ -9,6 +9,7 @@ export type AionisProvider = "none" | "openai" | "dashscope" | "minimax" | strin
 export type AionisQuickstart = "sdk" | "http" | "multi-agent" | "none";
 export type SkillCandidateReviewStatus = "pending_review" | "promoted" | "rejected" | "all";
 export type SkillCandidateAction = "list" | "promote" | "reject" | "materialize";
+export type RuntimeInspectAction = "health" | "boundary" | "doctor";
 
 export type SetupOptions = {
   dir: string;
@@ -40,11 +41,19 @@ export type SetupPlan = {
   redactedEnv: Record<string, string>;
 };
 
-export type SkillCandidateOptions = {
-  action: SkillCandidateAction;
-  candidateId: string | null;
+export type RuntimeRequestOptions = {
   runtimeUrl: string;
   apiKey: string | null;
+};
+
+export type RuntimeInspectOptions = RuntimeRequestOptions & {
+  action: RuntimeInspectAction;
+  json: boolean;
+};
+
+export type SkillCandidateOptions = RuntimeRequestOptions & {
+  action: SkillCandidateAction;
+  candidateId: string | null;
   tenantId: string | null;
   scope: string | null;
   status: SkillCandidateReviewStatus;
@@ -57,7 +66,8 @@ export type SkillCandidateOptions = {
 
 export type AionisParsedCommand =
   | { command: "setup"; options: SetupOptions }
-  | { command: "skills"; options: SkillCandidateOptions };
+  | { command: "skills"; options: SkillCandidateOptions }
+  | { command: RuntimeInspectAction; options: RuntimeInspectOptions };
 
 const DEFAULT_DIR = ".aionis-runtime";
 const DEFAULT_CREATE_PACKAGE = "@aionis/create@latest";
@@ -71,6 +81,9 @@ function usage(): string {
   npx aionis skills promote <candidate-id> [options]
   npx aionis skills reject <candidate-id> [options]
   npx aionis skills materialize <candidate-id> [--commit] [options]
+  npx aionis health [options]
+  npx aionis boundary [options]
+  npx aionis doctor [options]
 
 Installs a local Aionis Runtime first. SDK, HTTP, MCP, AIFS, and native
 plugins connect to that Runtime after it is installed.
@@ -115,9 +128,18 @@ Skills operator options:
                             recommended_observe_payload to /v1/observe.
   --json                    Print raw JSON response.
 
+Runtime inspect options:
+  --runtime-url <url>       Runtime URL. Defaults to AIONIS_URL, AIONIS_BASE_URL,
+                            AIONIS_RUNTIME_URL, or ${DEFAULT_RUNTIME_URL}.
+  --api-key <key>           Runtime API key. Defaults to AIONIS_API_KEY.
+  --json                    Print raw JSON response.
+
 Common commands:
   npx aionis setup
   npx aionis setup --with-claude-code
+  npx aionis doctor
+  npx aionis health
+  npx aionis boundary
   npx aionis skills candidates
   npx aionis skills promote skillcand_... --reason "verified reusable trace"
   npx aionis skills materialize skillcand_...
@@ -306,6 +328,47 @@ export function parseSkillCandidateArgs(argv: string[], env: NodeJS.ProcessEnv =
   };
 }
 
+export function parseRuntimeInspectArgs(
+  action: RuntimeInspectAction,
+  argv: string[],
+  env: NodeJS.ProcessEnv = process.env,
+): RuntimeInspectOptions {
+  let runtimeUrl = defaultRuntimeUrl(env);
+  let apiKey: string | null = env.AIONIS_API_KEY?.trim() || null;
+  let json = false;
+
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === "-h" || arg === "--help") {
+      process.stdout.write(usage());
+      process.exit(0);
+    }
+    if (arg === "--runtime-url" || arg === "--base-url") {
+      runtimeUrl = readFlagValue(argv, i, arg);
+      i += 1;
+      continue;
+    }
+    if (arg === "--api-key") {
+      apiKey = readFlagValue(argv, i, arg);
+      i += 1;
+      continue;
+    }
+    if (arg === "--json") {
+      json = true;
+      continue;
+    }
+    if (arg.startsWith("-")) throw new Error(`Unknown option "${arg}"`);
+    throw new Error(`Unexpected positional argument "${arg}"`);
+  }
+
+  return {
+    action,
+    runtimeUrl,
+    apiKey,
+    json,
+  };
+}
+
 export function parseAionisArgs(argv: string[], env: NodeJS.ProcessEnv = process.env): AionisParsedCommand {
   if (argv.length === 0 || argv[0] === "-h" || argv[0] === "--help") {
     process.stdout.write(usage());
@@ -319,7 +382,15 @@ export function parseAionisArgs(argv: string[], env: NodeJS.ProcessEnv = process
       options: parseSkillCandidateArgs(rest, env),
     };
   }
-  if (command !== "setup") throw new Error(`Unknown command "${command}". Use: aionis setup or aionis skills`);
+  if (command === "health" || command === "boundary" || command === "doctor") {
+    return {
+      command,
+      options: parseRuntimeInspectArgs(command, rest, env),
+    };
+  }
+  if (command !== "setup") {
+    throw new Error(`Unknown command "${command}". Use: aionis setup, aionis skills, aionis health, aionis boundary, or aionis doctor`);
+  }
 
   let dir = DEFAULT_DIR;
   let createPackage = env.AIONIS_CREATE_PACKAGE?.trim() || DEFAULT_CREATE_PACKAGE;
@@ -676,6 +747,11 @@ function runPlan(plan: SetupPlan): void {
 }
 
 type FetchLike = (input: string | URL, init?: RequestInit) => Promise<Response>;
+type RuntimeJsonRequest = {
+  method: "GET" | "POST";
+  path: string;
+  body?: Record<string, unknown>;
+};
 
 function compactObject(value: Record<string, unknown>): Record<string, unknown> {
   return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== null && entry !== undefined));
@@ -708,11 +784,16 @@ function candidateBody(options: SkillCandidateOptions): Record<string, unknown> 
   });
 }
 
-export function createSkillCandidateRuntimeRequest(options: SkillCandidateOptions): {
-  method: "GET" | "POST";
-  path: string;
-  body?: Record<string, unknown>;
-} {
+export function createRuntimeInspectRequests(options: RuntimeInspectOptions): RuntimeJsonRequest[] {
+  if (options.action === "health") return [{ method: "GET", path: "/health" }];
+  if (options.action === "boundary") return [{ method: "GET", path: "/v1/runtime/boundary-inventory" }];
+  return [
+    { method: "GET", path: "/health" },
+    { method: "GET", path: "/v1/runtime/boundary-inventory" },
+  ];
+}
+
+export function createSkillCandidateRuntimeRequest(options: SkillCandidateOptions): RuntimeJsonRequest {
   if (options.action === "list") {
     const params = new URLSearchParams({
       status: options.status,
@@ -745,8 +826,8 @@ export function createSkillCandidateRuntimeRequest(options: SkillCandidateOption
 }
 
 async function runtimeJsonRequest<T = unknown>(
-  options: SkillCandidateOptions,
-  request: { method: "GET" | "POST"; path: string; body?: Record<string, unknown> },
+  options: RuntimeRequestOptions,
+  request: RuntimeJsonRequest,
   fetchImpl: FetchLike,
 ): Promise<T> {
   const headers: Record<string, string> = {
@@ -770,6 +851,103 @@ async function runtimeJsonRequest<T = unknown>(
     throw new Error(`Runtime ${request.method} ${request.path} failed (${response.status}): ${message}`);
   }
   return payload as T;
+}
+
+function formatRuntimeHealth(result: unknown): string {
+  const record = asRecord(result) ?? {};
+  const runtime = asRecord(record.runtime) ?? {};
+  const storage = asRecord(record.storage) ?? {};
+  const lite = asRecord(record.lite);
+  const stores = asRecord(lite?.stores);
+  const sandbox = asRecord(record.sandbox) ?? {};
+  const packageName = stringValue(runtime.package_name);
+  const packageVersion = stringValue(runtime.package_version);
+  const startedAt = stringValue(runtime.started_at);
+  const storeEntries = stores ? Object.entries(stores) : [];
+  const storeSummary = storeEntries
+    .map(([name, value]) => {
+      const store = asRecord(value);
+      const ok = store?.ok === true ? "ok" : store?.ok === false ? "not_ok" : value ? "present" : "missing";
+      return `${name}=${ok}`;
+    })
+    .join(", ");
+  const lines = [
+    "Aionis Runtime health",
+    `ok=${record.ok === true ? "true" : "unknown"}`,
+    `runtime=${stringValue(runtime.edition) ?? "unknown"} mode=${stringValue(runtime.mode) ?? "unknown"}`,
+    `storage=${stringValue(storage.backend) ?? "unknown"}`,
+  ];
+  if (packageName || packageVersion) lines.push(`package=${packageName ?? "unknown"}@${packageVersion ?? "unknown"}`);
+  if (startedAt) lines.push(`started_at=${startedAt}`);
+  if (storeSummary) lines.push(`stores=${storeSummary}`);
+  if (Object.keys(sandbox).length > 0) {
+    const remoteEgress = asRecord(sandbox.remote_egress);
+    lines.push(`sandbox=${sandbox.status ?? sandbox.ok ?? "present"}`);
+    if (remoteEgress) lines.push(`remote_egress_cidrs=${remoteEgress.cidr_count ?? "unknown"}`);
+  }
+  lines.push("");
+  return lines.join("\n");
+}
+
+function formatBoundaryInventory(result: unknown): string {
+  const record = asRecord(result) ?? {};
+  const summary = asRecord(record.summary) ?? {};
+  const semantics = asRecord(record.surface_semantics) ?? {};
+  const files = stringList(record.files);
+  const lines = [
+    "Runtime boundary inventory",
+    `entries=${summary.total_entries ?? "unknown"} files=${summary.total_files ?? "unknown"} authority_entries=${summary.authority_entries ?? "unknown"}`,
+    `authority_producer_entries=${summary.authority_producer_entries ?? "unknown"}`,
+    `read_only=${semantics.read_only === true ? "true" : "unknown"} persistence_effect=${semantics.persistence_effect ?? "unknown"} authority_effect=${semantics.authority_effect ?? "unknown"}`,
+  ];
+  if (files.length > 0) {
+    const shown = files.slice(0, 10);
+    lines.push(`files=${shown.join(", ")}${files.length > shown.length ? `, ... +${files.length - shown.length}` : ""}`);
+  }
+  lines.push("");
+  return lines.join("\n");
+}
+
+function formatRuntimeDoctorResult(result: unknown): string {
+  const record = asRecord(result) ?? {};
+  const health = asRecord(record.health) ?? {};
+  const runtime = asRecord(health.runtime) ?? {};
+  const storage = asRecord(health.storage) ?? {};
+  const boundary = asRecord(record.boundary) ?? {};
+  const summary = asRecord(boundary.summary) ?? {};
+  const semantics = asRecord(boundary.surface_semantics) ?? {};
+  const lines = [
+    "Aionis Runtime doctor",
+    `health=${health.ok === true ? "ok" : "unknown"}`,
+    `runtime=${stringValue(runtime.edition) ?? "unknown"} mode=${stringValue(runtime.mode) ?? "unknown"} storage=${stringValue(storage.backend) ?? "unknown"}`,
+    `boundary=ok entries=${summary.total_entries ?? "unknown"} files=${summary.total_files ?? "unknown"}`,
+    `boundary_read_only=${semantics.read_only === true ? "true" : "unknown"} persistence_effect=${semantics.persistence_effect ?? "unknown"} authority_effect=${semantics.authority_effect ?? "unknown"}`,
+    "",
+  ];
+  return lines.join("\n");
+}
+
+function formatRuntimeInspectOutput(options: RuntimeInspectOptions, result: unknown): string {
+  if (options.action === "health") return formatRuntimeHealth(result);
+  if (options.action === "boundary") return formatBoundaryInventory(result);
+  return formatRuntimeDoctorResult(result);
+}
+
+export async function runRuntimeInspectCommand(
+  options: RuntimeInspectOptions,
+  fetchImpl: FetchLike = fetch,
+  stdout: Pick<NodeJS.WriteStream, "write"> = process.stdout,
+): Promise<unknown> {
+  const requests = createRuntimeInspectRequests(options);
+  const responses = [];
+  for (const request of requests) {
+    responses.push(await runtimeJsonRequest(options, request, fetchImpl));
+  }
+  const result = options.action === "doctor"
+    ? { health: responses[0], boundary: responses[1] }
+    : responses[0];
+  stdout.write(options.json ? `${JSON.stringify(result, null, 2)}\n` : formatRuntimeInspectOutput(options, result));
+  return result;
 }
 
 function formatCandidateRow(value: unknown): string {
@@ -892,6 +1070,10 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   const parsed = parseAionisArgs(argv);
   if (parsed.command === "skills") {
     await runSkillCandidateCommand(parsed.options);
+    return;
+  }
+  if (parsed.command !== "setup") {
+    await runRuntimeInspectCommand(parsed.options);
     return;
   }
   const options = await promptForSetupOptions(parsed.options);

@@ -1,6 +1,6 @@
 # aionis
 
-Product CLI for installing a local Aionis Runtime.
+Product CLI for installing and operating a local Aionis Runtime.
 
 ```bash
 npx aionis setup
@@ -41,6 +41,31 @@ Dry-run without installing:
 
 ```bash
 npx aionis setup --provider openai --dry-run
+```
+
+## Runtime inspection
+
+`aionis health`, `aionis boundary`, and `aionis doctor` are read-only operator
+commands for checking a running Runtime without mutating memory.
+
+```bash
+# Check /health.
+npx aionis health --runtime-url http://127.0.0.1:3001
+
+# Inspect the Runtime boundary inventory.
+npx aionis boundary
+
+# Run both checks and print a compact operator summary.
+npx aionis doctor
+```
+
+Useful options:
+
+```bash
+--runtime-url <url>   Defaults to AIONIS_URL, AIONIS_BASE_URL,
+                      AIONIS_RUNTIME_URL, or http://127.0.0.1:3001
+--api-key <key>       Defaults to AIONIS_API_KEY
+--json                Print the raw Runtime response
 ```
 
 ## Trace-derived skill review
