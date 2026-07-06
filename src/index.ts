@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 
 export type AionisProvider = "none" | "openai" | "dashscope" | "minimax" | string;
 export type AionisQuickstart = "sdk" | "http" | "multi-agent" | "none";
+export type AionisSetupProfile = "core" | "full-local";
 export type SkillCandidateReviewStatus = "pending_review" | "promoted" | "rejected" | "all";
 export type SkillCandidateAction = "list" | "promote" | "reject" | "materialize";
 export type RuntimeInspectAction = "health" | "boundary" | "doctor";
@@ -21,6 +22,7 @@ export type SetupOptions = {
   provider: AionisProvider;
   apiKey: string | null;
   quickstart: AionisQuickstart;
+  profile: AionisSetupProfile;
   withAifs: boolean;
   withZvecAnn: boolean;
   zvecPath: string | null;
@@ -129,6 +131,8 @@ Options:
   --dir <path>              Install directory. Defaults to ./.aionis-runtime.
   --provider <name>         Embedding provider: openai, dashscope, minimax, none, or custom. Defaults to detected env or openai.
   --quickstart <name>       Advanced: run an optional SDK, HTTP, or multi-agent verification flow after install. Defaults to none.
+  --profile <core|full-local>
+                            Install profile. Defaults to core. full-local enables AIFS guidance and Zvec ANN.
   --repo <url>              Runtime git repo passed to @aionis/create.
   --branch <name>           Runtime git branch or tag passed to @aionis/create.
   --with-aifs               Include @aionis/aifs file-surface setup commands.
@@ -201,6 +205,7 @@ Operator options:
 
 Common commands:
   npx aionis setup
+  npx aionis setup --profile full-local
   npx aionis setup --with-claude-code
   npx aionis doctor
   npx aionis health
@@ -215,6 +220,7 @@ Common commands:
   OPENAI_API_KEY=... npx aionis setup --provider openai --yes
   DASHSCOPE_API_KEY=... npx aionis setup --provider dashscope --yes
   MINIMAX_API_KEY=... npx aionis setup --provider minimax --yes
+  MINIMAX_API_KEY=... npx aionis setup --profile full-local --provider minimax --yes
 `;
 }
 
@@ -259,6 +265,11 @@ function parseQuickstart(value: string): AionisQuickstart {
     return value;
   }
   throw new Error(`Unsupported quickstart "${value}". Use sdk, http, multi-agent, or none.`);
+}
+
+function parseSetupProfile(value: string): AionisSetupProfile {
+  if (value === "core" || value === "full-local") return value;
+  throw new Error(`Unsupported setup profile "${value}". Use core or full-local.`);
 }
 
 function parseClaudeCodeScopeFrom(value: string): SetupOptions["claudeCodeScopeFrom"] {
@@ -715,6 +726,7 @@ export function parseAionisArgs(argv: string[], env: NodeJS.ProcessEnv = process
   let provider = defaultProvider(env);
   let apiKey: string | null = null;
   let quickstart: AionisQuickstart = "none";
+  let profile: AionisSetupProfile = "core";
   let withAifs = false;
   let withZvecAnn = false;
   let zvecPath: string | null = null;
@@ -766,6 +778,11 @@ export function parseAionisArgs(argv: string[], env: NodeJS.ProcessEnv = process
     if (arg === "--quickstart") {
       quickstart = parseQuickstart(readFlagValue(rest, i, arg));
       skipQuickstart = quickstart === "none";
+      i += 1;
+      continue;
+    }
+    if (arg === "--profile") {
+      profile = parseSetupProfile(readFlagValue(rest, i, arg));
       i += 1;
       continue;
     }
@@ -833,6 +850,11 @@ export function parseAionisArgs(argv: string[], env: NodeJS.ProcessEnv = process
     positionalDirSet = true;
   }
 
+  if (profile === "full-local") {
+    withAifs = true;
+    withZvecAnn = true;
+  }
+
   const providerKey = providerEnvKey(provider);
   if (providerKey) apiKey = env[providerKey]?.trim() || null;
 
@@ -846,6 +868,7 @@ export function parseAionisArgs(argv: string[], env: NodeJS.ProcessEnv = process
       provider,
       apiKey,
       quickstart,
+      profile,
       withAifs,
       withZvecAnn,
       zvecPath,
@@ -966,6 +989,9 @@ export async function promptForSetupOptions(options: SetupOptions): Promise<Setu
     }
     next.withAifs = await askBoolean(rl, "Show AIFS file-surface setup commands", next.withAifs);
     next.withZvecAnn = await askBoolean(rl, "Enable Zvec ANN candidate index", next.withZvecAnn);
+    if (next.profile === "full-local" && (!next.withAifs || !next.withZvecAnn)) {
+      next.profile = "core";
+    }
     if (next.withZvecAnn && next.zvecPath) {
       next.zvecPath = await askText(rl, "Zvec index path", next.zvecPath);
     }
@@ -993,6 +1019,7 @@ export async function promptForSetupOptions(options: SetupOptions): Promise<Setu
 
 export function createAionisCreateArgs(options: SetupOptions): string[] {
   const args = ["create-aionis", options.dir, "--provider", options.provider, "--quickstart", options.quickstart];
+  if (options.profile !== "core") args.push("--profile", options.profile);
   if (options.repo) args.push("--repo", options.repo);
   if (options.branch) args.push("--branch", options.branch);
   if (options.withAifs) args.push("--with-aifs");

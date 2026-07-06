@@ -95,12 +95,43 @@ test("aionis setup parses a product default that installs a sidecar Runtime", ()
   assert.equal(options.createPackage, "@aionis/create@latest");
   assert.equal(options.provider, "openai");
   assert.equal(options.quickstart, "none");
+  assert.equal(options.profile, "core");
   assert.equal(options.skipQuickstart, false);
   assert.equal(options.withZvecAnn, false);
   assert.equal(options.zvecPath, null);
   assert.equal(options.withClaudeCode, false);
   assert.equal(options.yes, false);
   assert.equal(options.dryRun, false);
+});
+
+test("aionis setup full-local profile composes existing local integration flags", () => {
+  const { options } = parseAionisArgs([
+    "setup",
+    "--profile",
+    "full-local",
+    "--provider",
+    "minimax",
+    "--yes",
+  ], {});
+  options.apiKey = "sk-minimax";
+
+  assert.equal(options.profile, "full-local");
+  assert.equal(options.withAifs, true);
+  assert.equal(options.withZvecAnn, true);
+  assert.equal(options.withClaudeCode, false);
+  assert.deepEqual(createAionisCreateArgs(options), [
+    "create-aionis",
+    ".aionis-runtime",
+    "--provider",
+    "minimax",
+    "--quickstart",
+    "none",
+    "--profile",
+    "full-local",
+    "--with-aifs",
+    "--with-zvec-ann",
+  ]);
+  assert.throws(() => parseAionisArgs(["setup", "--profile", "everything"], {}), /Unsupported setup profile/);
 });
 
 test("aionis setup runs an install verification flow only when explicitly requested", () => {

@@ -35,7 +35,13 @@ DASHSCOPE_API_KEY="sk-..." npx aionis setup .aionis-runtime --provider dashscope
 MINIMAX_API_KEY="sk-..." npx aionis setup .aionis-runtime --provider minimax --yes
 OPENAI_API_KEY="sk-..." npx aionis setup --with-claude-code --provider openai --yes
 MINIMAX_API_KEY="sk-..." npx aionis setup --with-zvec-ann --provider minimax --yes
+MINIMAX_API_KEY="sk-..." npx aionis setup --profile full-local --provider minimax --yes
 ```
+
+`--profile full-local` composes existing local integration options. It enables
+AIFS setup guidance and the Zvec ANN candidate index. It does not install
+Claude Code hooks or Substrate unless you choose those advanced integrations
+separately.
 
 Dry-run without installing:
 
