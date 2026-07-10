@@ -1021,6 +1021,7 @@ export function createAionisCreateArgs(options: SetupOptions): string[] {
   const args = ["create-aionis", options.dir, "--provider", options.provider, "--quickstart", options.quickstart];
   if (options.profile !== "core") args.push("--profile", options.profile);
   if (options.repo) args.push("--repo", options.repo);
+  // Omit the flag by default so @aionis/create owns the release-pinned Runtime ref.
   if (options.branch) args.push("--branch", options.branch);
   if (options.withAifs) args.push("--with-aifs");
   if (options.withZvecAnn) {

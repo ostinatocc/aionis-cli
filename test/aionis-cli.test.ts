@@ -93,6 +93,7 @@ test("aionis setup parses a product default that installs a sidecar Runtime", ()
   const { options } = parseAionisArgs(["setup"], {});
   assert.equal(options.dir, ".aionis-runtime");
   assert.equal(options.createPackage, "@aionis/create@latest");
+  assert.equal(options.branch, null);
   assert.equal(options.provider, "openai");
   assert.equal(options.quickstart, "none");
   assert.equal(options.profile, "core");
@@ -102,6 +103,7 @@ test("aionis setup parses a product default that installs a sidecar Runtime", ()
   assert.equal(options.withClaudeCode, false);
   assert.equal(options.yes, false);
   assert.equal(options.dryRun, false);
+  assert.equal(createAionisCreateArgs(options).includes("--branch"), false);
 });
 
 test("aionis setup full-local profile composes existing local integration flags", () => {
